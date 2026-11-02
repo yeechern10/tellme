@@ -61,14 +61,15 @@ CREATE TABLE IF NOT EXISTS articles (
     snippet         TEXT,
     published_at    TIMESTAMPTZ,
     source          TEXT,
-    language        TEXT,
+    article_language    TEXT,
     article_type    TEXT,  -- e.g., "news", "discussion", "research"
     content         TEXT,
-    content_status  TEXT,  -- e.g., "pending", "completed", "failed"
+    content_status  TEXT DEFAULT 'pending',  -- e.g., "pending", "completed", "failed"
     content_error   TEXT,  -- error message if content fetching failed
     embedding       vector(1024),            -- for BAAI/bge-m3
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    last_updated    TIMESTAMPTZ NOT NULL DEFAULT now()
+    last_updated    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    filtered        BOOLEAN DEFAULT FALSE
 );
 
 -- vector search index for articles embedding

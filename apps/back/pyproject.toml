@@ -1,5 +1,5 @@
 [project]
-name = "news-secretary"
+name = "tellme"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -19,6 +19,7 @@ dependencies = [
     "requests>=2.34.2",
     "scikit-learn>=1.9.1",
     "selenium>=4.51.0",
+    "sentence-transformers>=6.2.0",
     "trafilatura>=2.3.1",
     "transformers>=5.19.0",
 ]

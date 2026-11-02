@@ -1,0 +1,4 @@
+name: tellme-server
+
+include:
+  - ./docker-compose/pg-db-docker-compose.yml

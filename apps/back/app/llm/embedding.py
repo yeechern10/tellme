@@ -1,6 +1,8 @@
 from langchain_openai import OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 
+from ..pydantic_model import ArticleModel
+from uuid import UUID
 
 from ..db.retrieve import retrieve_leaves_keywords_from_db, structure_keywords
 from ..configuration import EMBEDDING_MODEL, EMBEDDING_BATCH_SIZE
@@ -42,18 +44,14 @@ def embedding_keywords(keyword_dicts):
     
     return keyword_dicts
 
-def article_dicts_to_text(article_dicts):
-    articles_texts = []
-    for _, details in article_dicts.items():
-        article_title = details["title"]
-        article_content = details["content"]
-        if article_content.startswith("failed:"):
-            article_content = " "
-        text = f"{article_title}\n{article_content}\n"
-        articles_texts.append(text)
-    return articles_texts
+def article_title_content_to_text(article: ArticleModel):
+    if article.content:
+        text = f"Title: {article.title}\nContent: {article.content}\n"
+    else:
+        text = f"Title: {article.title}\nSnippet: {article.snippet}\n"
+    return text
 
-def embedding_articles(article_dicts):
+def embedding_articles(article_dicts: dict[UUID, ArticleModel], to_embedding_articles: list[UUID]):
     embedding = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
         encode_kwargs={
@@ -62,9 +60,11 @@ def embedding_articles(article_dicts):
         }
     )
 
-    article_vectors = embedding.embed_documents([article["content"] for article in article_dicts.values()])
+    article_texts = [article_title_content_to_text(article_dicts[article_id]) for article_id in to_embedding_articles]
+    article_vectors = embedding.embed_documents(article_texts)
     
-    for i, article_id in enumerate(article_dicts.keys()):
-        article_dicts[article_id]["vector"] = article_vectors[i]
+    for i, article_id in enumerate(to_embedding_articles):
+        article_dicts[article_id].embedding = article_vectors[i]
+        article_dicts[article_id].embedded = True  # Mark the article as embedded
     
     return article_dicts

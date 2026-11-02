@@ -5,7 +5,7 @@ import sqlite3
 
 from .system_prompt import event_detector, uncertain_reanalysis_detector
 from ..db.retrieve import retrieve_articles_from_db
-from ..db.insert_data import insert_events_record, update_event_record
+from ..db.insert_record import insert_events_record, update_event_record
 from ..configuration import EVENT_DETECTOR_BASE_URL, EVENT_DETECTOR_MODEL, SQLITE_DB_PATH, UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE
 
 

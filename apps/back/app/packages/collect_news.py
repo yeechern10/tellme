@@ -3,81 +3,31 @@ import requests
 import datetime
 import trafilatura
 import pandas as pd
+from psycopg import Cursor
 from psycopg.rows import dict_row
-from typing import Literal
+from typing import Literal, Optional, TypeAlias
+from logging import Logger
+from pydantic import validate_call
+import time
 
-from ..configuration import NEWS_SOURCE, SQLITE_DB_PATH, BRAVE_SEARCH_API_KEY
+from ..db.update_record import update_articles_record
+from ..llm.embedding import embedding_articles
+from ..configuration import NEWS_SOURCE, BRAVE_SEARCH_API_KEY, TABLE_NAMES
 from ..packages.logger import get_logger
 from ..pydantic_model import ArticleModel
 from ..db.connect_db import connect_to_postgres
-from ..db.retrieve import get_articles_id, check_article_exists_embedded
-from ..db.insert_data import insert_articles_record
+from ..db.insert_record import insert_articles_record
 
-def request_news(
-    query: str,
-    time_range: Literal["pd", "pw", "pm", "py"] = "pd", # pd = past day, pw = past week, pm = past month, py = past year
-    language: str = "en",
-    country: str = "ALL",
-    logger: object = None
-):
-    search_params = {"q": query, "safesearch": "stict"}
-    if time_range:
-        search_params['freshness'] = time_range
-    if language:
-        search_params['search_lang'] = language
-    if country:
-        search_params['country'] = country
-    
+brave_search_country_type: TypeAlias = Literal['AR','AU','AT', 'BE','BR','CA','CL', 'DK', 'FI', 'FR', 'DE', 'GR', 'HK', 'IN', 'ID', 'IT', 'JP', 'KR', 'MY', 'MX', 'NL', 'NZ', 'NO', 'CN', 'PL', 'PT', 'PH', 'RU', 'SA', 'ZA', 'ES', 'SE', 'CH', 'TW', 'TR', 'GB', 'US', 'ALL']
+brave_search_language_type: TypeAlias = Literal['ar','eu', 'bn', 'bg', 'ca', 'zh-hans', 'zh-hant', 'hr', 'cs', 'da', 'nl', 'en', 'en-gb', 'et', 'fi', 'fr', 'gl', 'de', 'el', 'gu', 'he', 'hi', 'hu', 'is', 'it', 'ja', 'jp', 'kn', 'ko', 'lv', 'lt', 'ms', 'ml', 'mr', 'nb', 'pl', 'pt-br', 'pt-pt', 'pa', 'ro', 'ru', 'sr', 'sk', 'sl', 'es', 'sv', 'ta', 'te', 'th', 'tr', 'uk', 'vi']
 
-    # get news
-    
-    response = requests.post(
-        NEWS_SOURCE,
-        headers={
-            "X-Subscription-Token": BRAVE_SEARCH_API_KEY,
-            "accept": "application/json"
-            },
-        params = search_params
-    )
 
-    if response.status_code != 200:
-        if logger:
-            logger.error(f"Search request failed, status code : {response.status_code}, message: {response.text}, query: {query}, time_range: {time_range}, language: {language}, region: {country}")
-    
-    return response.json()
 
-def brave_search_result_interpretation(response, logger=None):
-    articles = []
-    query = response.get("query", {})
-    region = query.get("country", None)
-    
-    for article_type in ['news', 'discussions']:
-        if response.get(article_type):
-            for article in response[article_type].get("results", []):
-                published_at = convert_relative_date(article.get("age"), logger) if article.get("age") is not None else None
-                if article.get("meta_url") and article.get("meta_url").get("hostname"):
-                    source = article.get("meta_url").get("hostname")
-            else:
-                source = None
-
-                articles.append(ArticleModel(
-                    title=article.get("title"),
-                    link=article.get("url"),
-                    snippet=article.get("description"),
-                    published_at= published_at,
-                    source=source,
-                    language=article.get("language"),
-                    region=region,
-                    article_type=article_type
-                ))
-
-    
-    return articles
-
-def convert_relative_date(delta_t: str, logger=None):
+def convert_relative_date(delta_t: str, logger: Optional[Logger] =None):
     # Convert relative dates to absolute dates in the news list
-    current_date = datetime.datetime.now().date()
-
+    current_date = datetime.datetime.now()
+    published_at = None
+    
     if delta_t.endswith('ago'):
         if 'hour' in delta_t:
             hours = int(delta_t.split()[0])
@@ -97,170 +47,228 @@ def convert_relative_date(delta_t: str, logger=None):
         else:
             if logger:
                 logger.warning(f"Invalid delta_t '{delta_t}' provided. Defaulting to null.")
-        return published_at
-
     else:
         if logger:
             logger.warning(f"Invalid delta_t '{delta_t}' provided. Defaulting to null.")
+        
+    return published_at
 
 
-
-def add_news_info(news_list, language, region):
-    for news in news_list:
-        news['language'] = language
-        news['region'] = region 
-    return news_list
-    
-def restructure_news_list(news_list):
-    restructured_news_list = []
-    for news in news_list:
-        restructured_news_list.append({
-            'title': news['title'],
-            'link': news['link'],
-            'snippet': news.get('snippet', ''),
-            'published_at': news.get('date', None),
-            'source': news.get('source', None),
-            'language': news.get('language', None),
-            'region': news.get('region', None),
-            'content': None  # Placeholder for the full article content, to be filled later
-        })
-    return restructured_news_list
-
-def collect_news(query, time_range, language='en', region=None, logger=None):
-    tbs = 'qdr:d' # default to last 24 hours
-    
-    current_date = datetime.datetime.now().date()
-    
-    if time_range == '1d':
-        tbs = 'qdr:d'
-    elif time_range == '3d':
-        tbs = f'cdr:1,cd_min:{(current_date - datetime.timedelta(days=3)).strftime("%m/%d/%Y")},cd_max:{current_date.strftime("%m/%d/%Y")}'
-    elif time_range == '1w':
-        tbs = 'qdr:w'
-    elif time_range == '1m':
-        tbs = 'qdr:m'
-    elif time_range == '1y':
-        tbs = 'qdr:y'
-    else:
+def brave_search_result_interpretation(response: dict, logger: Optional[Logger] = None) -> list[ArticleModel]:
+    articles = []
+    results = response.get("results", [])
+    article_type = response.get("type", None)
+    if not results:
         if logger:
-            logger.warning(f"Invalid time_range '{time_range}' provided. Defaulting to last 24 hours.")
-        else:
-            print(f"Invalid time_range '{time_range}' provided. Defaulting to last 24 hours.")
+            logger.warning(f"No results found in the Brave Search response: {response}")
     
-    news_list = []
-    request_news(query, tbs, news_list, language, region, logger)
+        return articles
     
-    # Add language, region, and location information to each news item
-    add_news_info(news_list, language, region)
-    
-    return news_list
+    for result in results:
+        published_at = convert_relative_date(result.get("age"), logger) if result.get("age") is not None else None
+        
+        snippets = [result.get("description", "")]
+        snippets.extend(result.get("extra_snippets", []))
+        snippet = "\n".join(snippets)
 
-def fetch_article_content(url, scraper, logger=None):
+        meta_url = result.get("meta_url", {})
+        source = meta_url.get("hostname", None)
+
+        articles.append(ArticleModel(
+            title=result.get("title"),
+            link=result.get("url"),
+            snippet= snippet,
+            published_at= published_at,
+            source=source,
+            article_language=result.get("language"),
+            article_type=article_type
+        ))    
+    return articles
+
+
+def search_article(
+    query: str,
+    time_range: Literal["pd", "pw", "pm", "py"] = "pd", # pd = past day, pw = past week, pm = past month, py = past year
+    language: brave_search_language_type = "en",
+    logger: Optional[Logger] = None,
+    try_time: int = 0,
+    error_msg: str = "",
+    search_limit: Optional[int] = None
+):
+    time.sleep(try_time * 2)  # Exponential backoff: wait longer with each retry
+    try_time += 1
+    if try_time > 5:
+        if logger:
+            logger.error(f"Failed to search articles for query '{query}' after 5 attempts. Last error: {error_msg}")
+        return [] , error_msg
+    
+    search_params = {"q": query, "safesearch": "strict"}
+    if time_range:
+        search_params['freshness'] = time_range
+    if language:
+        search_params['search_lang'] = language
+    if search_limit:
+        search_params['count'] = search_limit
+    
+
+    # get news
+    response = requests.get(
+        NEWS_SOURCE,
+        headers={
+            "X-Subscription-Token": BRAVE_SEARCH_API_KEY,
+            "accept": "application/json"
+            },
+        params = search_params
+    )
+
+    if response.status_code != 200:
+        error_message = f"Search request failed, status code : {response.status_code}, message: {response.text}, query: {query}, time_range: {time_range}, language: {language}"
+        if logger:
+            logger.error(error_message)
+        return search_article(
+            query=query, time_range=time_range, language=language, logger=logger, try_time=try_time, error_msg=error_message, search_limit=search_limit)  # Retry the search with incremented try_time and error message
+    
+    articles = brave_search_result_interpretation(response.json(), logger)
+    
+    return articles , error_msg
+
+
+def search_articles(
+    queries: list[str],
+    time_range: Literal["pd", "pw", "pm", "py"] = "pd", # pd = past day, pw = past week, pm = past month, py = past year
+    language: brave_search_language_type = "en",
+    logger: Optional[Logger] = None,
+    search_limit: Optional[int] = None):
+    
+    article_list = []
+    for query in queries:
+        articles, _ = search_article(
+            query = query,
+            time_range=time_range, 
+            language=language, 
+            logger=logger,
+            search_limit=search_limit
+        )
+        article_list.extend(articles)
+    
+    return article_list
+
+def remove_duplicates_missing(article_list: list[ArticleModel]):
+    seen_links = set()
+    new_article_list = []
+    
+    # check duplicates and missing url 
+    for i, article in enumerate(article_list):
+        link = article.link
+        if not link or link in seen_links:
+            continue  # Skip articles with missing or duplicate links
+
+        seen_links.add(article.link)
+        new_article_list.append(article)    
+    
+    return new_article_list
+
+def fetch_article_content(url: str, scraper : cloudscraper.CloudScraper, logger: Optional[Logger] = None, try_time = 0, error_msg=""):
+    time.sleep(try_time * 2)  # Exponential backoff: wait longer with each retry
+    try_time += 1
+    success = False
+    if try_time > 5:
+        if logger:
+            logger.error(f"Failed to fetch article content from {url} after 5 attempts. Last error: {error_msg}")
+        return error_msg, success
+    
     try:
         response = scraper.get(url, timeout=15)
         response.raise_for_status()
         
-        # Extract the main content of the article
-        # soup = BeautifulSoup(response.content, 'html.parser')
-
-        # container = soup.find('article') or soup.find('main') or soup
-        # paragraphs = container.find_all('p')
-        # if not paragraphs  and container is not soup:
-        #     paragraphs = soup.find_all('p')
-        # texts = [p.get_text(strip=True) for p in paragraphs]
-        # texts = [t for t in texts if len(t) > 40]
-        # article_content = ' '.join(texts).strip()
         text = trafilatura.extract(response.text, include_comments=False, include_tables=False)
         
-        # check if the content is empty and log a warning if it is
+        # check if the content is empty try to fetch again
         if not text or len(text.strip()) == 0:
-            if logger:
-                logger.warning(f"Empty content extracted from {url}")
-            else:
-                print(f"Warning: Empty content extracted from {url}")
-            return "failed: Empty content extracted"
+            return fetch_article_content(url, scraper, logger, try_time, error_msg="failed: Empty content fetched")
         
-        return text
+        success = True
+        return text, success
     except requests.HTTPError as e:
-        # 403/404 errors are common when scraping, so we can log them as warnings instead of errors
-        if logger:
-            status = e.response.status_code if e.response is not None else "?"
-            logger.warning(f"HTTP {status} for {url}")
-        return f"failed: HTTP {status} for {url}"
-    except Exception as e:
-        if logger:
-            logger.error(f"Error fetching article content from {url}: {e}")
-        return f"failed: Error fetching article content from {url}: {e}"
-    
-def remove_duplicates_missing(news_list):    
-    df = pd.DataFrame(news_list)
-    
-    # remove duplicates based on url
-    df = df.drop_duplicates(subset='link')
-    
-    # remove rows with missing or null values in the 'link' column
-    df = df.dropna(subset=['link'])
-    
-    # convert back to news_list
-    news_list = df.to_dict(orient='records')
-    
-    return news_list
-    
-def new_article(article,scraper, cursor, article_dicts, logger=None):
-    article_content = fetch_article_content(article['link'], scraper, logger)
-    article['content'] = article_content
-    
-    # insert the article into the database
-    article_id = insert_articles_record(article, cursor, logger)
-    
-    if article_id:
-        article_dicts[article_id] = article
-    else:
-        if logger:
-            logger.error(f"Failed to insert article into database: {article['title']}")
+        # 403/404 errors are common when scraping, try fetch again
+        return fetch_article_content(url, scraper, logger, try_time, error_msg=f"failed: Error fetching article content from {url}: {e}")
 
-def article_pipeline(query_list, time_range, language='en', region=None, logger=None):
+
+
+def collect_article_pipeline(query_list, time_range, language='en', region=None, logger: Optional[Logger]=None, search_limit=None):
     if logger is None:
-        logger = get_logger()
+        logger = get_logger(__name__)
     
-    article_list = []
-    for query in query_list:
-        article_list.extend(collect_news(query, time_range, language, region, logger))
+    # search for articles based on the query list, time range, language, and region
+    article_list = search_articles(
+        queries=query_list,
+        time_range=time_range,
+        language=language,
+        logger=logger,
+        search_limit=search_limit
+    )
     
     # remove duplicates based on url
     article_list = remove_duplicates_missing(article_list)
-    
-    # convert relative dates to absolute dates in the news list
-    article_list = convert_news_date(article_list)
-    
-    # restructure the news list
-    article_list = restructure_news_list(article_list)
-    
+
     # fetch the full article content for each news item
     scraper = cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "windows", "mobile": False}
     )    
     
     article_dicts = {}
-    to_fetch_articles = []
     to_embedding_articles = []
     
     with connect_to_postgres() as conn:
-        with conn:
-            cursor = conn.cursor(row_factory=dict_row)
-            for article in article_list:
-                link = article.get('link')
+        for article in article_list:                
+            returned_article, inserted = insert_articles_record(conn, article, logger)                
+            if returned_article is None:
+                raise Exception(f"Failed to insert or retrieve article record for {article.link}")
+            
+            article.id = returned_article.id  # Update the article model with the ID from the database
+            
+            if (inserted 
+                or returned_article.content is None 
+                or returned_article.content_status != "completed"
+                or (
+                    returned_article.published_at and article.published_at 
+                    and returned_article.published_at < article.published_at
+                    )
+                ):
                 
-                # check if the article already exists in the database and already embedded
-                existing_article = check_article_exists_embedded(cursor, link)
-                
-                if not existing_article:
-                    new_article(article, scraper, cursor, article_dicts, logger)
-                    
-                            
-                    
+                content, success = fetch_article_content(article.link, scraper, logger)
+                if success:
+                    if returned_article.content is None or returned_article.content != content:
+                        article.content = content
+                        article.content_status = "completed"
+                        article.content_error = None
+                        article.embedded = False  # Reset embedding to False to indicate that it needs to be re-embedded
+                else:
+                    article.content = returned_article.content  # Keep the existing content if fetching failed (None or outdated content)
+                    article.content_status = "failed"
+                    article.content_error = content
+                    article.embedded = returned_article.embedded  # Keep the existing embedding status
+            
+            # if article is filtered, skip embedding and updating
+            if returned_article.filtered:
+                continue
+            
+            # save to article_dicts for later use
+            article_dicts[article.id] = article
+            
+            # check if the article needs to be embedded
+            if article.content and article.embedded is False:
+                to_embedding_articles.append(article.id)
+        
+        # embed the articles that need embedding
+        article_dicts = embedding_articles(article_dicts, to_embedding_articles)
+        
+        # update the articles in the database with the new content and embedding status
+        for article_id in to_embedding_articles:
+            article = article_dicts[article_id]
+            _ = update_articles_record(conn, article, logger)
 
-    
-    article_ids_dict = get_articles_id(news_list)
-    
-    return article_ids_dict
+    return article_dicts
+                
+                    
+                
