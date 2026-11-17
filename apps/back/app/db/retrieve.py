@@ -8,26 +8,11 @@ from typing import Optional
 
 from apps.back.app.db.table_schema import ARTICLE_TABLE_FIELDS
 
-from ..pydantic_model import ArticleModel, EventModel
+from ..pydantic_model import ArticleModel, EventModel, KeywordModel
 
 from ..db.connect_db import connect_to_postgres
 from ..configuration import TABLE_NAMES
 
-def structure_keywords(keywords):
-    keyword_dict = {}
-    for keyword in keywords:
-        # ('medtop:20000893', 'artistic cycling', 'Individual or teams on one or two bicycles in an arena. Points are awarded by a jury.', 'arena cycling , bicycle competition , team cycling', 'medtop:20000892', None, '2026-10-16 06:40:33')
-        keyword_id, name, description, synonyms, parent_id, child_ids, created_at = keyword
-        keyword_dict[keyword_id] = {
-            "id": keyword_id,
-            "keyword": name,
-            "description": description,
-            "synonyms": synonyms.split(" , ") if synonyms else [],
-            "parent_id": parent_id,
-            "child_ids": child_ids.split(" , ") if child_ids else [],
-            "created_at": created_at
-        }
-    return keyword_dict
 
 def retrieve_leaves_keywords_from_db():
     with connect_to_postgres() as conn:
@@ -35,12 +20,10 @@ def retrieve_leaves_keywords_from_db():
         cursor.execute(f"SELECT * FROM {TABLE_NAMES['keywords']} WHERE child_ids IS NULL")
         keywords = cursor.fetchall()
         columns = [d[0] for d in cursor.description]
-        keyword_dicts = []
+        keyword_dict = {}
         for row in keywords:
-            keyword_dict = {}
-            for i in range(len(cursor.description)):
-                keyword_dicts.append(dict(zip(columns, row)))
-    return keyword_dicts
+            keyword_dict[row['id']] = KeywordModel(**row)
+    return keyword_dict
 
 def get_event_with_event_id(cursor: psycopg.Cursor, event_id: str):
     try:
@@ -57,7 +40,7 @@ def get_event_with_event_id(cursor: psycopg.Cursor, event_id: str):
         return None
 
 def get_article_event(cursor: psycopg.Cursor, article: ArticleModel):
-    event_dicts = {}
+    event_dict = {}
     try:
         cursor.execute(f"""SELECT event_id 
                        FROM {TABLE_NAMES['event_article_relationships']} 
@@ -72,9 +55,9 @@ def get_article_event(cursor: psycopg.Cursor, article: ArticleModel):
             event = get_event_with_event_id(cursor, event_id)
             if event:
                 event.article_ids.add(article.id)  # Add the article ID to the event's article_ids set
-                event_dicts[event_id] = event
+                event_dict[event_id] = event
         
-        return article, event_dicts        
+        return article, event_dict        
     except Exception as e:
         print(f"Error retrieving event for article {article.id}: {e}")
         return article, None

@@ -1,6 +1,6 @@
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 from uuid import UUID
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from datetime import datetime
 
 class KeywordModel(BaseModel):
@@ -41,6 +41,7 @@ class ArticleModel(BaseModel):
     embedded: bool = Field(False, description="Whether the article has been embedded")
     event_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the events associated with the article")
     filtered: bool = Field(False, description="Whether the article has been filtered out during event detection")
+    simlilar_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the similar articles associated with the article")
 
 class EventModel(BaseModel):
     model_config = ConfigDict(extra="ignore")  # Ignore extra fields not defined in the model
@@ -57,3 +58,43 @@ class EventModel(BaseModel):
     last_updated: Optional[datetime] = Field(None, description="The last updated timestamp of the event")
     embedded: bool = Field(False, description="Whether the event has been embedded")
     article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the articles associated with the event")
+    
+    
+### llm structured output models for event detection and grouping
+
+# Article event grouping result models
+class EventGroup(BaseModel):
+    group_id: str = Field(description="Unique identifier for the event group, e.g. 'batch_event_001'.")
+    event_candidate_title: str = Field(description="A concise, neutral title supported by the grouped article titles.")
+    article_refs: List[str] = Field(description="References (e.g. 'A_1', 'A_2') of articles in this group.")
+    grouping_evidence: str = Field(description="Briefly state the title details that support grouping these articles as the same specific event.")
+    confidence: float = Field(ge=0.0,le=1.0,description="Confidence score between 0.0 and 1.0.")
+
+class NonEventArticle(BaseModel):
+    article_ref: str = Field(description="Reference of the article, e.g. 'A_3'.")
+    reason: Literal[
+        "opinion",
+        "analysis_without_new_event",
+        "evergreen",
+        "service_or_how_to",
+        "review_or_promotion",
+        "no_identifiable_event",
+    ] = Field(description="Category explaining why this article is not a reportable event.")
+
+class UncertainArticle(BaseModel):
+    article_ref: str = Field(description="Reference of the article, e.g. 'A_4'.")
+    reason: str = Field(description="Briefly explain why the title alone is insufficient to identify or group the article.")
+
+class EventGroupingResult(BaseModel):
+    event_groups: List[EventGroup] = Field(
+        default_factory=list,
+        description="Groups of articles that report the same specific event.",
+    )
+    non_event_articles: List[NonEventArticle] = Field(
+        default_factory=list,
+        description="Articles determined not to describe an identifiable event.",
+    )
+    uncertain_articles: List[UncertainArticle] = Field(
+        default_factory=list,
+        description="Articles whose titles are insufficient to decide.",
+    )

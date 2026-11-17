@@ -12,7 +12,6 @@ import time
 
 from ..db.update_record import update_articles_record
 from ..llm.embedding import embedding_articles
-from ..configuration import NEWS_SOURCE, BRAVE_SEARCH_API_KEY, TABLE_NAMES
 from ..packages.logger import get_logger
 from ..pydantic_model import ArticleModel
 from ..db.connect_db import connect_to_postgres
@@ -86,7 +85,8 @@ def brave_search_result_interpretation(response: dict, logger: Optional[Logger] 
     return articles
 
 
-def search_article(
+def brave_search_article(
+    brave_search_api_key: str,
     query: str,
     time_range: Literal["pd", "pw", "pm", "py"] = "pd", # pd = past day, pw = past week, pm = past month, py = past year
     language: brave_search_language_type = "en",
@@ -113,9 +113,9 @@ def search_article(
 
     # get news
     response = requests.get(
-        NEWS_SOURCE,
+        "https://api.search.brave.com/res/v1/news/search",
         headers={
-            "X-Subscription-Token": BRAVE_SEARCH_API_KEY,
+            "X-Subscription-Token": brave_search_api_key,
             "accept": "application/json"
             },
         params = search_params
@@ -125,15 +125,25 @@ def search_article(
         error_message = f"Search request failed, status code : {response.status_code}, message: {response.text}, query: {query}, time_range: {time_range}, language: {language}"
         if logger:
             logger.error(error_message)
-        return search_article(
-            query=query, time_range=time_range, language=language, logger=logger, try_time=try_time, error_msg=error_message, search_limit=search_limit)  # Retry the search with incremented try_time and error message
+        return brave_search_article(
+            brave_search_api_key=brave_search_api_key,
+            query=query,
+            time_range=time_range,
+            language=language,
+            logger=logger,
+            try_time=try_time,
+            error_msg=error_message,
+            search_limit=search_limit
+        )  # Retry the search with incremented try_time and error message
     
     articles = brave_search_result_interpretation(response.json(), logger)
     
     return articles , error_msg
 
 
-def search_articles(
+
+def brave_search_articles(
+    brave_search_api_key: str,
     queries: list[str],
     time_range: Literal["pd", "pw", "pm", "py"] = "pd", # pd = past day, pw = past week, pm = past month, py = past year
     language: brave_search_language_type = "en",
@@ -142,7 +152,8 @@ def search_articles(
     
     article_list = []
     for query in queries:
-        articles, _ = search_article(
+        articles, _ = brave_search_article(
+            brave_search_api_key=brave_search_api_key,
             query = query,
             time_range=time_range, 
             language=language, 
@@ -168,7 +179,13 @@ def remove_duplicates_missing(article_list: list[ArticleModel]):
     
     return new_article_list
 
-def fetch_article_content(url: str, scraper : cloudscraper.CloudScraper, logger: Optional[Logger] = None, try_time = 0, error_msg=""):
+def fetch_article_content(
+    url: str,
+    scraper : cloudscraper.CloudScraper,
+    logger: Optional[Logger] = None,
+    try_time = 0,
+    error_msg=""):
+    
     time.sleep(try_time * 2)  # Exponential backoff: wait longer with each retry
     try_time += 1
     success = False
@@ -195,18 +212,30 @@ def fetch_article_content(url: str, scraper : cloudscraper.CloudScraper, logger:
 
 
 
-def collect_article_pipeline(query_list, time_range, language='en', region=None, logger: Optional[Logger]=None, search_limit=None):
+
+def collect_article_pipeline(
+    search_api:str,
+    search_api_key: str,
+    query_list,
+    time_range: Literal["pd", "pw", "pm", "py"] = "pd",
+    language='en',
+    logger: Optional[Logger]=None,
+    search_limit=None):
     if logger is None:
         logger = get_logger(__name__)
     
     # search for articles based on the query list, time range, language, and region
-    article_list = search_articles(
-        queries=query_list,
-        time_range=time_range,
-        language=language,
-        logger=logger,
-        search_limit=search_limit
-    )
+    if search_api == "brave":
+        article_list = brave_search_articles(
+            brave_search_api_key= search_api_key,
+            queries=query_list,
+            time_range=time_range,
+            language=language,
+            logger=logger,
+            search_limit=search_limit
+        )
+    else:
+        raise ValueError(f"Unsupported search API: {search_api}")
     
     # remove duplicates based on url
     article_list = remove_duplicates_missing(article_list)

@@ -2,13 +2,107 @@ from datetime import datetime
 import json
 import openai
 import sqlite3
+from langchain_ollama import ChatOllama
+from langchain_core.messages import SystemMessage, HumanMessage
+import os
+from logging import Logger
 
-from .system_prompt import event_detector, uncertain_reanalysis_detector
+from ..packages.logger import get_logger
+from .system_prompt import article_event_grouping_agent, event_detector, uncertain_reanalysis_detector
+from ..pydantic_model import EventGroupingResult
 from ..db.retrieve import retrieve_articles_from_db
 from ..db.insert_record import insert_events_record, update_event_record
-from ..configuration import EVENT_DETECTOR_BASE_URL, EVENT_DETECTOR_MODEL, SQLITE_DB_PATH, UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE
+from ..configuration import ARTICLE_EVENT_GROUPING_AGENT_MODEL, ARTICLE_EVENT_GROUPING_AGENT_SOURCE, ARTICLE_EVENT_GROUPING_AGENT_API_KEY, EVENT_DETECTOR_BASE_URL, EVENT_DETECTOR_MODEL, SQLITE_DB_PATH, UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE
+
+def group_articles_by_event(
+    articles_dict,
+    model_name,
+    model_source,
+    api_key,
+    logger=None) -> tuple[dict, dict]:
+    ref_id_map = {}
+    idx = 0
+    article_list = []
+    for article_id, article in articles_dict.items():
+        idx += 1
+        ref = f"A_{idx}"
+        ref_id_map[ref] = article_id
+        article_list.append({
+            "article_ref": ref,
+            "title": article.get("title"),
+            "source_name": article.get("source"),
+            "published_at": article.get("published_at")
+        })
+
+    system_prompt = article_event_grouping_agent[list(article_event_grouping_agent.keys())[-1]]  # Get the last version of the system prompt
+    
+    if model_source == "ollama":
+        llm_client = ChatOllama(model=model_name, api_key=api_key)
+    else:
+        llm_client = ChatOllama(model=model_name, api_key=api_key)
+
+    try_times = 5
+    
+    while try_times > 0:
+        try:
+            llm_client = llm_client.with_structured_output(EventGroupingResult)
+            messages=[
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=json.dumps(article_list))
+            ]
+            response = llm_client.invoke(messages)
+        except Exception as e:
+            try_times -= 1
+            if logger:
+                logger.error(f"Error during event grouping: {e}")
+            if try_times == 0:
+                raise e
+            continue
+        
+        raw_ai_message = response["raw"]
+        parsed = response["parsed"]
+        parsing_error = response["parsing_error"]
+        
+        if parsing_error or not parsed:
+            # If parsing fails, try to parse the raw AI message manually using Pydantic
+            try:
+                validated = EventGroupingResult.model_validate_json(raw_ai_message)
+            except Exception as e:
+                try_times -= 1
+                if logger:
+                    logger.error(f"Error during event grouping parsing: {e}")
+                if try_times == 0:
+                    raise e
+                continue
+        else:
+            # If langchain parsing is successful, validate again using Pydantic to ensure the structure is correct
+            try:
+                validated = EventGroupingResult.model_validate(parsed.model_dump())
+            except Exception as e:
+                try_times -= 1
+                if logger:
+                    logger.error(f"Error during event grouping validation: {e}")
+                if try_times == 0:
+                    raise e
+                continue
+        
+        break  # Exit the loop if validation is successful
+    
+    return validated.model_dump(), ref_id_map
 
 
+
+def first_pass_event_resolution(
+    grouped_articles: dict,
+    ref_id_map: dict,
+    articles_dict: dict,
+    prompt_version: str = "latest",
+    logger: Logger = None) -> dict:
+    
+        
+
+        
+    
 
 def detect_event(news_list, api_key = " ", logger=None):
     system_prompt = event_detector[list(event_detector.keys())[-1]]  # Get the last version of the system prompt
