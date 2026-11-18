@@ -4,7 +4,6 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from ..pydantic_model import ArticleModel
 from uuid import UUID
 
-from ..db.retrieve import retrieve_leaves_keywords_from_db, structure_keywords
 from ..configuration import EMBEDDING_MODEL, EMBEDDING_BATCH_SIZE
 
 def keyword_dicts_to_text(keyword_dicts):

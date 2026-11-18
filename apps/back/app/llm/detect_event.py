@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 import json
 import openai
 import sqlite3
@@ -6,135 +6,184 @@ from langchain_ollama import ChatOllama
 from langchain_core.messages import SystemMessage, HumanMessage
 import os
 from logging import Logger
+from uuid import UUID
 
+from ..pydantic_model import ArticleModel, EventModel, KeywordModel, EventGroupingResult, FirstPassEventResolutionResult
 from ..packages.logger import get_logger
-from .system_prompt import article_event_grouping_agent, event_detector, uncertain_reanalysis_detector
-from ..pydantic_model import EventGroupingResult
-from ..db.retrieve import retrieve_articles_from_db
-from ..db.insert_record import insert_events_record, update_event_record
-from ..configuration import ARTICLE_EVENT_GROUPING_AGENT_MODEL, ARTICLE_EVENT_GROUPING_AGENT_SOURCE, ARTICLE_EVENT_GROUPING_AGENT_API_KEY, EVENT_DETECTOR_BASE_URL, EVENT_DETECTOR_MODEL, SQLITE_DB_PATH, UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE
+from ..llm.prompts.get_prompt import get_prompt
+
+def json_default(o):
+    if isinstance(o, (datetime, date)):
+        return o.isoformat()   # aware
+    raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
 
 def group_articles_by_event(
-    articles_dict,
+    to_process_article_ids: set[UUID],
+    articles_dict: dict,
     model_name,
     model_source,
     api_key,
     logger=None) -> tuple[dict, dict]:
-    ref_id_map = {}
-    idx = 0
-    article_list = []
-    for article_id, article in articles_dict.items():
-        idx += 1
-        ref = f"A_{idx}"
-        ref_id_map[ref] = article_id
-        article_list.append({
-            "article_ref": ref,
-            "title": article.get("title"),
-            "source_name": article.get("source"),
-            "published_at": article.get("published_at")
-        })
+    
+    system_prompt = get_prompt("article_event_grouping_agent", version="latest")
 
-    system_prompt = article_event_grouping_agent[list(article_event_grouping_agent.keys())[-1]]  # Get the last version of the system prompt
+    article_list = []
+    for id in to_process_article_ids:
+        article = articles_dict.get(id)
+        if not article:
+            if logger:
+                logger.error(f"Article with ID {id} not found in articles_dict.")
+            continue
+        
+        article_list.append({
+            "article_ref": article.ref_id,
+            "title": article.title,
+            "source_name": article.source,
+            "published_at": article.published_at
+        })
+        
+    if logger:
+        logger.info(f"Grouping {len(article_list)} articles into events using model {model_name} from source {model_source}.")
     
     if model_source == "ollama":
         llm_client = ChatOllama(model=model_name, api_key=api_key)
     else:
-        llm_client = ChatOllama(model=model_name, api_key=api_key)
+        logger.error(f"Unsupported model source: {model_source}")
 
-    try_times = 5
+    llm_client = llm_client.with_structured_output(EventGroupingResult, include_raw=True)
+    messages=[
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=json.dumps(article_list, default=json_default))
+    ]
+
+    max_retries = 5
+    try_times = 0
     
-    while try_times > 0:
+    while try_times < max_retries:
         try:
-            llm_client = llm_client.with_structured_output(EventGroupingResult)
-            messages=[
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=json.dumps(article_list))
-            ]
             response = llm_client.invoke(messages)
-        except Exception as e:
-            try_times -= 1
+            
+            raw_ai_message = response["raw"]
+            parsed = response["parsed"]
+            parsing_error = response["parsing_error"]
+            
+            
             if logger:
-                logger.error(f"Error during event grouping: {e}")
-            if try_times == 0:
-                raise e
-            continue
-        
-        raw_ai_message = response["raw"]
-        parsed = response["parsed"]
-        parsing_error = response["parsing_error"]
-        
-        if parsing_error or not parsed:
-            # If parsing fails, try to parse the raw AI message manually using Pydantic
-            try:
+                logger.info(f"Raw AI message: {raw_ai_message}")
+                logger.info(f"Parsed AI message: {parsed.model_dump() if parsed else None}")
+                logger.info(f"Parsing error: {parsing_error}")
+            
+            if parsing_error or not parsed:
+                # If parsing fails, try to parse the raw AI message manually using Pydantic
                 validated = EventGroupingResult.model_validate_json(raw_ai_message)
-            except Exception as e:
-                try_times -= 1
-                if logger:
-                    logger.error(f"Error during event grouping parsing: {e}")
-                if try_times == 0:
-                    raise e
-                continue
-        else:
-            # If langchain parsing is successful, validate again using Pydantic to ensure the structure is correct
-            try:
-                validated = EventGroupingResult.model_validate(parsed.model_dump())
-            except Exception as e:
-                try_times -= 1
-                if logger:
-                    logger.error(f"Error during event grouping validation: {e}")
-                if try_times == 0:
-                    raise e
-                continue
+            else:
+                validated = parsed
+                
+            return validated.model_dump()
         
-        break  # Exit the loop if validation is successful
+        except Exception as e:
+            try_times += 1
+            if logger:
+                logger.error(f"Error during event grouping: {e}, attempt {try_times} of {max_retries}")
+
+            continue
+    else:
+            if logger:
+                logger.error("Failed to get a valid response from the LLM after multiple attempts.")
+            raise Exception("Failed to get a valid response from the LLM after multiple attempts.")
     
-    return validated.model_dump(), ref_id_map
+    
 
 
 
 def first_pass_event_resolution(
-    grouped_articles: dict,
-    ref_id_map: dict,
-    articles_dict: dict,
+    grouped_article_ids: list[UUID],
+    similar_article_event_ids: list[UUID],
+    same_batch_event_ids: list[UUID],
+    articles_dict: dict[UUID, ArticleModel],
+    events_dict: dict[UUID, EventModel],
+    model_name: str,
+    model_source: str,
+    api_key: str,
     prompt_version: str = "latest",
     logger: Logger = None) -> dict:
     
-        
+    sys_prompt = get_prompt("first_pass_event_resolution", version=prompt_version)
+    
+    article_list = [{
+        "article_ref": articles_dict[article_id].ref_id,
+        "title": articles_dict[article_id].title,
+        "source_name": articles_dict[article_id].source,
+        "published_at": articles_dict[article_id].published_at
+    } for article_id in grouped_article_ids]
+    
+    similar_article_event_list = [{
+        "event_ref": events_dict[event_id].ref_id,
+        "event_title": events_dict[event_id].title,
+        "event_summary": events_dict[event_id].summary,
+        "published_at_range": [events_dict[event_id].published_at_range_start, events_dict[event_id].published_at_range_end],
+        "representative_article": [articles_dict[article_id].title for article_id in events_dict[event_id].article_ids[:5] if article_id in articles_dict]
+    } for event_id in similar_article_event_ids]
+    
+    same_batch_events = [{
+        "event_ref": events_dict[event_id].ref_id,
+        "event_title": events_dict[event_id].title,
+        "event_summary": events_dict[event_id].summary,
+        "published_at_range": [events_dict[event_id].published_at_range_start, events_dict[event_id].published_at_range_end],
+        "representative_article": [articles_dict[article_id].title for article_id in events_dict[event_id].article_ids[:5] if article_id in articles_dict]
+    } for event_id in same_batch_event_ids]
+    
+    content = {
+        'articles': article_list,
+        'similar_article_events': similar_article_event_list,
+        'same_batch_events': same_batch_events
+    }
+    
+    if model_source == "ollama":
+        llm_client = ChatOllama(model=model_name, api_key=api_key)
+    else:
+        logger.error(f"Unsupported model source: {model_source}")
+      
+    llm_client = llm_client.with_structured_output(FirstPassEventResolutionResult, include_raw=True)
+    messages=[
+        SystemMessage(content=sys_prompt),
+        HumanMessage(content=json.dumps(content, default=json_default))
+    ]
+    
+    max_retries = 5
+    try_times = 0
+    while try_times < max_retries:
+        try:
+            response = llm_client.invoke(messages)
+            
+            raw_ai_message = response["raw"]
+            parsed = response["parsed"]
+            parsing_error = response["parsing_error"]
+            
+            if parsing_error or not parsed:
+                # If parsing fails, try to parse the raw AI message manually using Pydantic
+                validated = FirstPassEventResolutionResult.model_validate_json(raw_ai_message)
+            else:
+                validated = parsed
+            
+            break  # Exit the loop if the request is successful
+            
+        except Exception as e:
+            try_times += 1
+            if logger:
+                logger.error(f"Error during first pass event resolution: {e}, attempt {try_times} of {max_retries}")
 
-        
-    
-
-def detect_event(news_list, api_key = " ", logger=None):
-    system_prompt = event_detector[list(event_detector.keys())[-1]]  # Get the last version of the system prompt
-    llm_client = openai.OpenAI(api_key=api_key, base_url=EVENT_DETECTOR_BASE_URL)
-    
-    articles_list = []
-    for news in news_list:
-        articles_list.append({
-            "article_id": news.get("id"),
-            "title": news.get("title"),
-            "body": news.get("content"),
-            "source_name": news.get("source"),
-            "published_at": news.get("published_at")
-        })
-    
-    try:
-        response = llm_client.chat.completions.create(
-            model=EVENT_DETECTOR_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(articles_list)}
-            ],
-            response_format={"type": "json_object"},
-        )
-    except openai.error.OpenAIError as e:
+            continue
+    else:
         if logger:
-            logger.error(f"Error during event extraction: {e}")
-        else:
-            print(f"Error during event extraction: {e}")
-        return None
+            logger.error("Failed to get a valid response from the LLM after multiple attempts.")
+        raise Exception("Failed to get a valid response from the LLM after multiple attempts.")
 
-    return response.choices[0].message.content
+    return validated.model_dump()
+    
+
+        
+
 
 def get_published_at_range(articles, ids, current_start=None, current_end=None):
     for id in ids:
@@ -148,161 +197,146 @@ def get_published_at_range(articles, ids, current_start=None, current_end=None):
                     current_end = published_at
     return current_start, current_end
 
-def event_restructuring(response, news_list, logger=None):
-    event_list = []
-    filtered_articles = []
-    uncertain_articles = []
-    try:
-        data = json.loads(response)
-    except json.JSONDecodeError as e:
-        if logger:
-            logger.error(f"Error during event restructuring: {e}")
-        else:
-            print(f"Error during event restructuring: {e}")
-        return None    
+# def event_restructuring(response, news_list, logger=None):
+#     event_list = []
+#     filtered_articles = []
+#     uncertain_articles = []
+#     try:
+#         data = json.loads(response)
+#     except json.JSONDecodeError as e:
+#         if logger:
+#             logger.error(f"Error during event restructuring: {e}")
+#         else:
+#             print(f"Error during event restructuring: {e}")
+#         return None    
 
-    data = data.get("events")
-    if not data:
-        if logger:
-            logger.warning("No events found in the response.")
-        else:
-            print("No events found in the response.")
-        return event_list, filtered_articles, uncertain_articles
+#     data = data.get("events")
+#     if not data:
+#         if logger:
+#             logger.warning("No events found in the response.")
+#         else:
+#             print("No events found in the response.")
+#         return event_list, filtered_articles, uncertain_articles
     
-    events = data.get("events")
-    for event in data:
-        try:
-            event_title = event["event_title"]
-            article_ids = event["article_ids"]
-            confidence = event["confidence_score"]
-        except KeyError as e:
-            if logger:
-                logger.error(f"Error occurred while extracting event data: {e}. Event data: {event}")
-            else:
-                print(f"Skipping event due to missing title or articles: {event}")
-            continue
+#     events = data.get("events")
+#     for event in data:
+#         try:
+#             event_title = event["event_title"]
+#             article_ids = event["article_ids"]
+#             confidence = event["confidence_score"]
+#         except KeyError as e:
+#             if logger:
+#                 logger.error(f"Error occurred while extracting event data: {e}. Event data: {event}")
+#             else:
+#                 print(f"Skipping event due to missing title or articles: {event}")
+#             continue
         
-        # Get the published_at range for the articles in this event
-        published_at_range_start, published_at_range_end = get_published_at_range(news_list, article_ids)
+#         # Get the published_at range for the articles in this event
+#         published_at_range_start, published_at_range_end = get_published_at_range(news_list, article_ids)
         
         
-        # Append the event to the event_list
-        event_list.append({
-            "event_title": event_title,
-            "article_ids": article_ids,
-            "published_at_range_start": published_at_range_start,
-            "published_at_range_end": published_at_range_end,
-            "confidence_score": confidence
-        })
+#         # Append the event to the event_list
+#         event_list.append({
+#             "event_title": event_title,
+#             "article_ids": article_ids,
+#             "published_at_range_start": published_at_range_start,
+#             "published_at_range_end": published_at_range_end,
+#             "confidence_score": confidence
+#         })
     
-    filtered = data.get("filtered_articles", [])
-    for article in filtered:
-        # Append the articles to the filtered_articles list
-        article_id = article.get("article_id") if article.get("article_id") else article.get("id")
-        reason = article.get("reason")
-        if not article_id or not reason:
-            if logger:
-                logger.warning(f"Skipping filtered article due to missing article_id or reason: {article}")
-            else:
-                print(f"Skipping filtered article due to missing article_id or reason: {article}")
-            continue
-        filtered_articles.append({
-            "article_id": article_id,
-            "reason": reason
-        })
+#     filtered = data.get("filtered_articles", [])
+#     for article in filtered:
+#         # Append the articles to the filtered_articles list
+#         article_id = article.get("article_id") if article.get("article_id") else article.get("id")
+#         reason = article.get("reason")
+#         if not article_id or not reason:
+#             if logger:
+#                 logger.warning(f"Skipping filtered article due to missing article_id or reason: {article}")
+#             else:
+#                 print(f"Skipping filtered article due to missing article_id or reason: {article}")
+#             continue
+#         filtered_articles.append({
+#             "article_id": article_id,
+#             "reason": reason
+#         })
     
-    uncertain = data.get("uncertain_articles", [])
-    for article in uncertain:
-        # Append the articles to the uncertain_articles list
-        article_id = article.get("article_id") if article.get("article_id") else article.get("id")
-        reason = article.get("reason")
-        if not article_id or not reason:
-            if logger:
-                logger.warning(f"Skipping uncertain article due to missing article_id or reason: {article}")
-            else:
-                print(f"Skipping uncertain article due to missing article_id or reason: {article}")
-            continue
-        uncertain_articles.append({
-            "article_id": article_id,
-            "reason": reason
-        })
+#     uncertain = data.get("uncertain_articles", [])
+#     for article in uncertain:
+#         # Append the articles to the uncertain_articles list
+#         article_id = article.get("article_id") if article.get("article_id") else article.get("id")
+#         reason = article.get("reason")
+#         if not article_id or not reason:
+#             if logger:
+#                 logger.warning(f"Skipping uncertain article due to missing article_id or reason: {article}")
+#             else:
+#                 print(f"Skipping uncertain article due to missing article_id or reason: {article}")
+#             continue
+#         uncertain_articles.append({
+#             "article_id": article_id,
+#             "reason": reason
+#         })
     
-    return event_list, filtered_articles, uncertain_articles
+#     return event_list, filtered_articles, uncertain_articles
 
-def uncertain_reanalysis(event_dict, filtered_articles, uncertain_articles, articles_dict, content_truncate = UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE,api_key = " ", logger=None):
-    # Get the content of the uncertain articles
-    uncertain_article_ids = [article.get("article_id") for article in uncertain_articles]
+# def uncertain_reanalysis(event_dict, filtered_articles, uncertain_articles, articles_dict, content_truncate = UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE,api_key = " ", logger=None):
+#     # Get the content of the uncertain articles
+#     uncertain_article_ids = [article.get("article_id") for article in uncertain_articles]
     
-    input_content = {
-        "existing_events": [],
-        "uncertain_articles": []
-    }
+#     input_content = {
+#         "existing_events": [],
+#         "uncertain_articles": []
+#     }
     
-    for event in event_dict.values():
-        published_at_range = f"{event.get('published_at_range_start').strftime('%Y-%m-%d %H:%M:%S')} - {event.get('published_at_range_end').strftime('%Y-%m-%d %H:%M:%S')}" if event.get('published_at_range_start') and event.get('published_at_range_end') else None
+#     for event in event_dict.values():
+#         published_at_range = f"{event.get('published_at_range_start').strftime('%Y-%m-%d %H:%M:%S')} - {event.get('published_at_range_end').strftime('%Y-%m-%d %H:%M:%S')}" if event.get('published_at_range_start') and event.get('published_at_range_end') else None
         
-        input_content["existing_events"].append({
-            "event_id": event.get("event_id"),
-            "event_title": event.get("event_title"),
-            "published_at_range": published_at_range,
-            "confidence_score": event.get("confidence_score"),
-            "article_titles": [articles_dict.get(article_id).get("title") for article_id in event.get("article_ids") if articles_dict.get(article_id)]
-        })
+#         input_content["existing_events"].append({
+#             "event_id": event.get("event_id"),
+#             "event_title": event.get("event_title"),
+#             "published_at_range": published_at_range,
+#             "confidence_score": event.get("confidence_score"),
+#             "article_titles": [articles_dict.get(article_id).get("title") for article_id in event.get("article_ids") if articles_dict.get(article_id)]
+#         })
     
-    for uncertain_article in uncertain_articles:
-        article_id = uncertain_article.get("article_id")
-        article = articles_dict.get(article_id)
-        if article:
-            input_content["uncertain_articles"].append({
-                "article_id": article_id,
-                "title": article.get("title"),
-                "content": article.get("content")[:content_truncate] if article.get("content") else None,  # Limit content to first 2000 characters
-                "source_name": article.get("source"),
-                "published_at": article.get("published_at"),
-            })
+#     for uncertain_article in uncertain_articles:
+#         article_id = uncertain_article.get("article_id")
+#         article = articles_dict.get(article_id)
+#         if article:
+#             input_content["uncertain_articles"].append({
+#                 "article_id": article_id,
+#                 "title": article.get("title"),
+#                 "content": article.get("content")[:content_truncate] if article.get("content") else None,  # Limit content to first 2000 characters
+#                 "source_name": article.get("source"),
+#                 "published_at": article.get("published_at"),
+#             })
     
-    llm_client = openai.OpenAI(api_key=api_key, base_url=EVENT_DETECTOR_BASE_URL)
-    system_prompt = uncertain_reanalysis_detector[list(uncertain_reanalysis_detector.keys())[-1]]  # Get the last version of the system prompt
-    response = llm_client.chat.completions.create(
-        model=EVENT_DETECTOR_MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": json.dumps(input_content)}
-        ],
-        response_format={"type": "json_object"},
-    )
+#     llm_client = openai.OpenAI(api_key=api_key, base_url=EVENT_DETECTOR_BASE_URL)
+#     system_prompt = get_prompt("uncertain_reanalysis_detector", version="latest")
+#     response = llm_client.chat.completions.create(
+#         model=EVENT_DETECTOR_MODEL,
+#         messages=[
+#             {"role": "system", "content": system_prompt},
+#             {"role": "user", "content": json.dumps(input_content)}
+#         ],
+#         response_format={"type": "json_object"},
+#     )
     
-    result = json.loads(response.choices[0].message.content)
+#     result = json.loads(response.choices[0].message.content)
     
-    if "existing_event_updates" not in result or "new_events" not in result or "filtered_articles" not in result:
-        if logger:
-            logger.error(f"Unexpected response format from uncertain reanalysis: {result}")
-        else:
-            print(f"Unexpected response format from uncertain reanalysis: {result}")
-        return None, None
+#     if "existing_event_updates" not in result or "new_events" not in result or "filtered_articles" not in result:
+#         if logger:
+#             logger.error(f"Unexpected response format from uncertain reanalysis: {result}")
+#         else:
+#             print(f"Unexpected response format from uncertain reanalysis: {result}")
+#         return None, None
     
-    for event_update in result["existing_event_updates"]:
-        event_id = event_update.get("event_id")
-        event_dict[event_id]["article_ids"].extend(event_update.get("new_article_ids", []))
-        event_dict[event_id]["confidence_score"] = event_update.get("updated_confidence")
-    
-    
+#     for event_update in result["existing_event_updates"]:
+#         event_id = event_update.get("event_id")
+#         event_dict[event_id]["article_ids"].extend(event_update.get("new_article_ids", []))
+#         event_dict[event_id]["confidence_score"] = event_update.get("updated_confidence")
     
     
     
     
     
-def event_detection_pipeline(news_list, api_key = " ", logger=None):
-    response = detect_event(news_list, api_key=api_key, logger=logger)
-    if response is None:
-        return None, None, None
-    event_list, filtered_articles, uncertain_articles = event_restructuring(response, news_list, logger=logger)
-    
-    # save detected events to the database
-    with connect_to_postgres() as conn:
-        with conn:
-            cursor = conn.cursor(row_factory=dict_row)
-            for event in event_list:
-                insert_events_record(event, cursor, logger=logger)
-
-    
+   

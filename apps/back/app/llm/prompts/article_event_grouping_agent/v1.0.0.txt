@@ -52,7 +52,7 @@ Return valid JSON only, with no markdown or commentary. Follow this schema:
 {
   "event_groups": [
     {
-      "group_id": "batch_event_001",
+      "group_ref": "G_1",
       "event_candidate_title": "A concise, neutral title supported by the grouped article titles",
       "article_refs": ["A_1", "A_2"],
       "grouping_evidence": "Briefly state the title details that support grouping these articles as the same specific event.",
@@ -76,7 +76,7 @@ Return valid JSON only, with no markdown or commentary. Follow this schema:
 ## Completeness and Consistency
 - Every input article_ref must appear exactly once: in one event group's article_refs, in non_event_articles, or in uncertain_articles.
 - Do not include an article_ref in more than one group or output section.
-- Use a unique, batch-local group_id for each event group. These IDs are temporary and are not database event IDs.
+- Use a unique, batch-local group_ref for each event group. These IDs are temporary and are not database event IDs.
 - Use an empty array when an output section has no entries.
 - Confidence must be a number from 0.0 to 1.0.
 - If the title evidence is ambiguous, do not guess; use uncertain_articles.

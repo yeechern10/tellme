@@ -1,6 +1,6 @@
 import cloudscraper
 import requests
-import datetime
+from datetime import datetime, timezone, timedelta
 import trafilatura
 import pandas as pd
 from psycopg import Cursor
@@ -24,25 +24,25 @@ brave_search_language_type: TypeAlias = Literal['ar','eu', 'bn', 'bg', 'ca', 'zh
 
 def convert_relative_date(delta_t: str, logger: Optional[Logger] =None):
     # Convert relative dates to absolute dates in the news list
-    current_date = datetime.datetime.now()
+    current_date = datetime.now(timezone.utc)
     published_at = None
     
     if delta_t.endswith('ago'):
         if 'hour' in delta_t:
             hours = int(delta_t.split()[0])
-            published_at = (current_date - datetime.timedelta(hours=hours))
+            published_at = (current_date - timedelta(hours=hours))
         elif 'day' in delta_t:
             days = int(delta_t.split()[0])
-            published_at = (current_date - datetime.timedelta(days=days))
+            published_at = (current_date - timedelta(days=days))
         elif 'week' in delta_t:
             weeks = int(delta_t.split()[0])
-            published_at = (current_date - datetime.timedelta(weeks=weeks))
+            published_at = (current_date - timedelta(weeks=weeks))
         elif 'month' in delta_t:
             months = int(delta_t.split()[0])
-            published_at = (current_date - datetime.timedelta(days=30*months))
+            published_at = (current_date - timedelta(days=30*months))
         elif 'year' in delta_t:
             years = int(delta_t.split()[0])
-            published_at = (current_date - datetime.timedelta(days=365*years))
+            published_at = (current_date - timedelta(days=365*years))
         else:
             if logger:
                 logger.warning(f"Invalid delta_t '{delta_t}' provided. Defaulting to null.")
@@ -223,6 +223,7 @@ def collect_article_pipeline(
     search_limit=None):
     if logger is None:
         logger = get_logger(__name__)
+    logger.info(f"Starting article collection pipeline with search_api: {search_api}, time_range: {time_range}, language: {language}, search_limit: {search_limit}")
     
     # search for articles based on the query list, time range, language, and region
     if search_api == "brave":
@@ -240,6 +241,8 @@ def collect_article_pipeline(
     # remove duplicates based on url
     article_list = remove_duplicates_missing(article_list)
 
+    logger.info(f"Collected {len(article_list)} unique articles after removing duplicates and missing URLs.")
+    
     # fetch the full article content for each news item
     scraper = cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "windows", "mobile": False}
@@ -248,6 +251,7 @@ def collect_article_pipeline(
     article_dicts = {}
     to_embedding_articles = []
     
+    logger.info(f"Starting to fetch content for {len(article_list)} articles.")
     with connect_to_postgres() as conn:
         for article in article_list:                
             returned_article, inserted = insert_articles_record(conn, article, logger)                
@@ -297,6 +301,7 @@ def collect_article_pipeline(
             article = article_dicts[article_id]
             _ = update_articles_record(conn, article, logger)
 
+    logger.info(f"Completed article collection pipeline with {len(article_dicts)} articles.")
     return article_dicts
                 
                     

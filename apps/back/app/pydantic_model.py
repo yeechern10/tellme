@@ -1,3 +1,4 @@
+from enum import Enum
 from typing import Literal, Optional, List
 from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict, model_validator
@@ -41,6 +42,7 @@ class ArticleModel(BaseModel):
     embedded: bool = Field(False, description="Whether the article has been embedded")
     event_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the events associated with the article")
     filtered: bool = Field(False, description="Whether the article has been filtered out during event detection")
+    ref_id: Optional[str] = Field(None, description="The reference ID of the article, e.g. 'A_1', 'A_2'")
     simlilar_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the similar articles associated with the article")
 
 class EventModel(BaseModel):
@@ -58,13 +60,15 @@ class EventModel(BaseModel):
     last_updated: Optional[datetime] = Field(None, description="The last updated timestamp of the event")
     embedded: bool = Field(False, description="Whether the event has been embedded")
     article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the articles associated with the event")
+    ref_id: Optional[str] = Field(None, description="The reference ID of the event, e.g. 'E_1', 'E_2'")
+    new_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the new articles assigned to the event")
     
     
 ### llm structured output models for event detection and grouping
 
-# Article event grouping result models
+## Article event grouping result models
 class EventGroup(BaseModel):
-    group_id: str = Field(description="Unique identifier for the event group, e.g. 'batch_event_001'.")
+    group_ref: str = Field(description="Unique temporary identifier for the event group, e.g. 'G_1', 'G_2', ...")
     event_candidate_title: str = Field(description="A concise, neutral title supported by the grouped article titles.")
     article_refs: List[str] = Field(description="References (e.g. 'A_1', 'A_2') of articles in this group.")
     grouping_evidence: str = Field(description="Briefly state the title details that support grouping these articles as the same specific event.")
@@ -98,3 +102,59 @@ class EventGroupingResult(BaseModel):
         default_factory=list,
         description="Articles whose titles are insufficient to decide.",
     )
+
+    @model_validator(mode="after")
+    def _not_all_empty(self):
+        if not (self.event_groups or self.non_event_articles or self.uncertain_articles):
+            raise ValueError("model returned an empty result; likely failed to process input")
+        return self
+
+
+
+## LLM structured output model for first pass event resolution
+class MatchCandidate(BaseModel):
+    group_ref: str
+    decision: Literal["match_similar_article_event", "match_same_batch"]
+    event_ref: str
+    article_refs: List[str]
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: str
+
+
+class CreateNew(BaseModel):
+    group_ref: str
+    temporary_event_id: str
+    event_title: str
+    article_refs: List[str]
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: str
+
+
+class UncertainArticle(BaseModel):
+    article_ref: str
+    reason: str
+
+
+class DiscardedArticle(BaseModel):
+    article_ref: str
+    reason: Literal[
+        "opinion",
+        "analysis_without_new_event",
+        "evergreen",
+        "service_or_how_to",
+        "review_or_promotion",
+        "no_identifiable_event",
+    ]
+
+
+class FirstPassEventResolutionResult(BaseModel):
+    match_candidate: List[MatchCandidate] = Field(default_factory=list)
+    create_new: List[CreateNew] = Field(default_factory=list)
+    uncertain_articles: List[UncertainArticle] = Field(default_factory=list)
+    discarded_articles: List[DiscardedArticle] = Field(default_factory=list)
+    
+    @model_validator(mode="after")
+    def _not_all_empty(self):
+        if not (self.match_candidate or self.create_new or self.uncertain_articles or self.discarded_articles):
+            raise ValueError("model returned an empty result; likely failed to process input")
+        return self
