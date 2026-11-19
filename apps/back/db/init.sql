@@ -69,7 +69,8 @@ CREATE TABLE IF NOT EXISTS articles (
     embedding       vector(1024),            -- for BAAI/bge-m3
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_updated    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    filtered        BOOLEAN DEFAULT FALSE
+    discarded       BOOLEAN DEFAULT FALSE,
+    discarded_reason TEXT
 );
 
 -- vector search index for articles embedding

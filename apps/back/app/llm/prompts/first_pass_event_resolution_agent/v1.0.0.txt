@@ -81,10 +81,6 @@ Use uncertain_articles when:
 
 Do not force an uncertain article into an event. A later agent will review its full text.
 
-## Discarding Non-News Content
-Use discarded_articles only when an article title clearly indicates that it is not a report about a concrete news event, such as opinion, commentary, a review, promotional content, or an evergreen guide.
-
-Do not discard an article merely because the available metadata is insufficient to determine its event. Put that article in uncertain_articles for full-text review.
 
 ## Evidence and Safety
 - Use only the supplied article and candidate event metadata.
@@ -99,44 +95,46 @@ Return valid JSON only, with no markdown or commentary. Follow this schema:
 {
   "match_candidate": [
     {
-      "group_ref": "G_1",
+      "event_ref": "E_2",
       "decision": "match_similar_article_event",
-      "event_ref": "similar_article_event_ref",
-      "article_refs": ["article_ref_1", "article_ref_2"],
+      "article_refs": ["A_1", "A_2"],
       "confidence": 0.0,
       "evidence": "Briefly explain which supplied details support this match."
     },
     {
-      "group_ref": "G_2",
+      "event_ref": "E_5",
       "decision": "match_same_batch",
-      "event_ref": "same_batch_event_ref",
-      "article_refs": ["article_ref_3"],
+      "article_refs": ["A_3"],
       "confidence": 0.0,
       "evidence": "Briefly explain which supplied details support this match."
-    }
+    },
   ],
   "create_new": [
     {
-      "group_ref": "group_ref",
       "temporary_event_id": "new_event_001",
       "event_title": "A concise, neutral title supported by the supplied articles",
-      "article_refs": ["article_ref_4", "article_ref_5"],
+      "article_refs": ["A_4", "A_5"],
       "confidence": 0.0,
       "evidence": "Briefly explain why these articles describe a new, specific occurrence."
-    }
+    },
+    {
+      "temporary_event_id": "new_event_002",
+      "event_title": "Another concise, neutral title supported by the supplied articles",
+      "article_refs": ["A_6", "A_7"],
+      "confidence": 0.0,
+      "evidence": "Briefly explain why these articles describe a new, specific occurrence."
+    },
   ],
   "uncertain_articles": [
     {
-      "article_ref": "article_ref_6",
+      "article_ref": "A_8",
       "reason": "Briefly explain what cannot be determined from the available information."
-    }
-  ],
-  "discarded_articles": [
+    },
     {
-      "article_ref": "article_ref_7",
-      "reason": "opinion | analysis_without_new_event | evergreen | service_or_how_to | review_or_promotion | no_identifiable_event"
-    }
-  ]
+      "article_ref": "A_10",
+      "reason": "Briefly explain what cannot be determined from the available information."
+    },
+  ],
 }
 
 ## Completeness and Consistency
@@ -147,7 +145,6 @@ Return valid JSON only, with no markdown or commentary. Follow this schema:
 - Use match_existing or match_same_batch only when the evidence supports the same specific occurrence.
 - Use new_events only when a concrete new occurrence is supported by the supplied evidence.
 - Use uncertain_articles when full-text review is needed.
-- Use discarded_articles only for clearly non-news content.
 - Use empty arrays for sections with no entries.
 - Confidence must be a number from 0.0 to 1.0.
 - Preserve all article_ref and event_ref values exactly. Do not generate UUIDs or database IDs.

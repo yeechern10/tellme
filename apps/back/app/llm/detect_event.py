@@ -63,7 +63,7 @@ def group_articles_by_event(
         try:
             response = llm_client.invoke(messages)
             
-            raw_ai_message = response["raw"]
+            raw_ai_message = response["raw"].content if isinstance(response["raw"], HumanMessage) else response["raw"]
             parsed = response["parsed"]
             parsing_error = response["parsing_error"]
             
@@ -108,7 +108,7 @@ def first_pass_event_resolution(
     prompt_version: str = "latest",
     logger: Logger = None) -> dict:
     
-    sys_prompt = get_prompt("first_pass_event_resolution", version=prompt_version)
+    sys_prompt = get_prompt("first_pass_event_resolution_agent", version=prompt_version)
     
     article_list = [{
         "article_ref": articles_dict[article_id].ref_id,
@@ -156,7 +156,7 @@ def first_pass_event_resolution(
         try:
             response = llm_client.invoke(messages)
             
-            raw_ai_message = response["raw"]
+            raw_ai_message = response["raw"].content if isinstance(response["raw"], HumanMessage) else response["raw"]
             parsed = response["parsed"]
             parsing_error = response["parsing_error"]
             
@@ -166,7 +166,7 @@ def first_pass_event_resolution(
             else:
                 validated = parsed
             
-            break  # Exit the loop if the request is successful
+            return validated.model_dump()
             
         except Exception as e:
             try_times += 1
@@ -179,7 +179,7 @@ def first_pass_event_resolution(
             logger.error("Failed to get a valid response from the LLM after multiple attempts.")
         raise Exception("Failed to get a valid response from the LLM after multiple attempts.")
 
-    return validated.model_dump()
+    
     
 
         

@@ -41,7 +41,8 @@ class ArticleModel(BaseModel):
     last_updated: Optional[datetime] = Field(None, description="The last updated timestamp of the article")
     embedded: bool = Field(False, description="Whether the article has been embedded")
     event_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the events associated with the article")
-    filtered: bool = Field(False, description="Whether the article has been filtered out during event detection")
+    discarded: bool = Field(False, description="Whether the article has been discarded during event detection")
+    discarded_reason: Optional[str] = Field(None, description="The reason why the article was discarded during event detection")
     ref_id: Optional[str] = Field(None, description="The reference ID of the article, e.g. 'A_1', 'A_2'")
     simlilar_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the similar articles associated with the article")
 
@@ -113,16 +114,14 @@ class EventGroupingResult(BaseModel):
 
 ## LLM structured output model for first pass event resolution
 class MatchCandidate(BaseModel):
-    group_ref: str
-    decision: Literal["match_similar_article_event", "match_same_batch"]
     event_ref: str
+    decision: Literal["match_similar_article_event", "match_same_batch"]
     article_refs: List[str]
     confidence: float = Field(ge=0.0, le=1.0)
     evidence: str
 
 
 class CreateNew(BaseModel):
-    group_ref: str
     temporary_event_id: str
     event_title: str
     article_refs: List[str]
@@ -135,23 +134,10 @@ class UncertainArticle(BaseModel):
     reason: str
 
 
-class DiscardedArticle(BaseModel):
-    article_ref: str
-    reason: Literal[
-        "opinion",
-        "analysis_without_new_event",
-        "evergreen",
-        "service_or_how_to",
-        "review_or_promotion",
-        "no_identifiable_event",
-    ]
-
-
 class FirstPassEventResolutionResult(BaseModel):
     match_candidate: List[MatchCandidate] = Field(default_factory=list)
     create_new: List[CreateNew] = Field(default_factory=list)
     uncertain_articles: List[UncertainArticle] = Field(default_factory=list)
-    discarded_articles: List[DiscardedArticle] = Field(default_factory=list)
     
     @model_validator(mode="after")
     def _not_all_empty(self):

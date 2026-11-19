@@ -126,7 +126,7 @@ def insert_articles_record(
     
     except errors.UniqueViolation as e:
         if logger:
-            logger.error(f"Error inserting article {article.title}: {e.diag.message_detail}")
+            logger.info(f"Error inserting article {article.title}: {e.diag.message_detail}")
 
         conflict_condition = get_conflict_condition(e.diag.message_detail)
                 

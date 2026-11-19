@@ -3,6 +3,7 @@ from typing import Optional, Literal
 from logging import Logger
 from tqdm import tqdm
 
+from ..pydantic_model import ArticleModel, EventModel
 from ..llm.detect_event import group_articles_by_event, first_pass_event_resolution
 from ..db.retrieve import get_article_event, get_similar_articles
 from ..db.connect_db import connect_to_postgres
@@ -99,13 +100,23 @@ def articles_request_event_pipeline(
         logger=logger
     )
     
+    discarded_article_ids = set()
+    if group_result.get('non_event_articles'):
+        for discarded_article in group_result['non_event_articles']:
+            article_id = article_ref_id_map.get(discarded_article['article_ref'])
+            if article_id:
+                discarded_article_ids.add(article_id)
+                ARTICLES_DICT[article_id].discarded = True
+                ARTICLES_DICT[article_id].discarded_reason = discarded_article.get('reason', 'Unknown')
+
+
     event_groups = []
     for event_group in group_result['event_groups']:
         group_article_ids = []
         
         for ref in event_group['article_refs']:
             article_id = article_ref_id_map.get(ref)
-            if article_id and not ARTICLES_DICT.get(article_id).event_ids:
+            if article_id and not ARTICLES_DICT.get(article_id).event_ids and article_id not in discarded_article_ids:
                 # add article_id to group_article_ids only if it has no existing event_ids
                 group_article_ids.append(article_id)
                 
@@ -119,15 +130,17 @@ def articles_request_event_pipeline(
             "confidence": event_group['confidence']
         })
     
-    non_event_article_ids = set()
-    if group_result.get('discarded_articles'):
-        non_event_article_ids.update([article_ref_id_map[article['article_ref']] for article in group_result['discarded_articles']])
+
+
     
     uncertainty_article_ids = set()
     if group_result.get('uncertain_articles'):
         uncertainty_article_ids.update([article_ref_id_map[article['article_ref']] for article in group_result['uncertain_articles']])
                 
-    logger.info(f"Event grouping completed. {len(event_groups)} event groups, {len(non_event_article_ids)} non-event articles, {len(uncertainty_article_ids)} uncertain articles.")
+    logger.info(f"Event grouping completed. {len(event_groups)} event groups, {len(group_result.get('discarded_articles'))} non-event articles, {len(uncertainty_article_ids)} uncertain articles.")
+    
+    updated_event_ids = set()
+    new_event_ids = set()
     
     # first pass event resolution, resolve events from articles with 
     for event_group in tqdm(event_groups, desc="First Pass Event Resolution"):
@@ -148,7 +161,7 @@ def articles_request_event_pipeline(
         # first pass event resolution
         first_pass_result = first_pass_event_resolution(
             grouped_article_ids=grouped_artilce_ids,
-            similar_event_ids=similar_event_ids,
+            similar_article_event_ids=similar_event_ids,
             same_batch_event_ids=same_batch_event_ids,
             articles_dict=ARTICLES_DICT,
             events_dict=EVENTS_DICT,
@@ -158,6 +171,30 @@ def articles_request_event_pipeline(
             prompt_version="latest",
             logger=logger
         )
+        
+        # update events_dict with new article_ids from match_candidate
+        if first_pass_result["match_candidate"]:
+            for match in first_pass_result["match_candidate"]:
+                event_ref = match["event_ref"]
+                event_id = event_ref_id_map.get(event_ref)
+                if event_id:
+                    updated_event_ids.add(event_id)
+                    EVENTS_DICT[event_id].new_article_ids.update([article_ref_id_map[ref] for ref in match["article_refs"]])
+                    
+        # update events_dict with new article_ids from create_new
+        if first_pass_result["create_new"]:
+            for new_event in first_pass_result["create_new"]:
+                new_event_id = f"new_event_{len(new_event_ids) + 1}"
+                new_event_ids.add(new_event_id)
+                
+                EVENTS_DICT[new_event_id] = EventModel({
+                    "title": new_event["event_title"],
+                    "article_ids": set([article_ref_id_map[ref] for ref in new_event["article_refs"]]),
+                    "new_article_ids": set(),
+                    "ref_id": new_event["temporary_event_id"]
+                })
+
+            
         
 
     logger.info("First pass event resolution completed.")
