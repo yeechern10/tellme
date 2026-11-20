@@ -4,7 +4,7 @@ from logging import Logger
 from tqdm import tqdm
 
 from ..pydantic_model import ArticleModel, EventModel
-from ..llm.detect_event import group_articles_by_event, first_pass_event_resolution
+from ..llm.detect_event import group_articles_by_event, event_resolution
 from ..db.retrieve import get_article_event, get_similar_articles
 from ..db.connect_db import connect_to_postgres
 from ..packages.collect_news import collect_article_pipeline
@@ -130,8 +130,6 @@ def articles_request_event_pipeline(
             "confidence": event_group['confidence']
         })
     
-
-
     
     uncertainty_article_ids = set()
     if group_result.get('uncertain_articles'):
@@ -142,8 +140,9 @@ def articles_request_event_pipeline(
     updated_event_ids = set()
     new_event_ids = set()
     
-    # first pass event resolution, resolve events from articles with 
-    for event_group in tqdm(event_groups, desc="First Pass Event Resolution"):
+    # Event resolution, resolve events from articles with similar content and same batch articles
+    logger.info("Starting event resolution...")
+    for event_group in tqdm(event_groups, desc="Event Resolution"):
         grouped_artilce_ids = event_group['article_ids']
 
         # get similar articles for the group articles
@@ -159,7 +158,7 @@ def articles_request_event_pipeline(
                 similar_event_ids.update(similar_article.event_ids)
         
         # first pass event resolution
-        first_pass_result = first_pass_event_resolution(
+        first_pass_result = event_resolution(
             grouped_article_ids=grouped_artilce_ids,
             similar_article_event_ids=similar_event_ids,
             same_batch_event_ids=same_batch_event_ids,
@@ -193,11 +192,22 @@ def articles_request_event_pipeline(
                     "new_article_ids": set(),
                     "ref_id": new_event["temporary_event_id"]
                 })
+                
+                # add new_event_id to same_batch_event_ids to prevent creating same event for other groups in the same batch
+                same_batch_event_ids.add(new_event_id)
+        
+        # update uncertainty_article_ids with new uncertain articles
+        if first_pass_result["uncertain_articles"]:
+            uncertainty_article_ids.update([article_ref_id_map[article["article_ref"]] for article in first_pass_result["uncertain_articles"]])
+            
+            
+            
+    #  Event Summary Agent
+    
 
             
         
 
-    logger.info("First pass event resolution completed.")
     
     return first_pass_result
 
