@@ -206,9 +206,11 @@ def fetch_article_content(
         
         success = True
         return text, success
-    except requests.HTTPError as e:
-        # 403/404 errors are common when scraping, try fetch again
+    except (requests.RequestException, ConnectionError, TimeoutError, OSError) as e:
+        # HTTP errors, refused connections, timeouts, and DNS failures are common when scraping.
         return fetch_article_content(url, scraper, logger, try_time, error_msg=f"failed: Error fetching article content from {url}: {e}")
+    except Exception as e:
+        return fetch_article_content(url, scraper, logger, try_time, error_msg=f"failed: Error extracting article content from {url}: {e}")
 
 
 
@@ -282,8 +284,8 @@ def collect_article_pipeline(
                     article.content_error = content
                     article.embedded = returned_article.embedded  # Keep the existing embedding status
             
-            # if article is filtered, skip embedding and updating
-            if returned_article.filtered:
+            # if article is discarded, skip embedding and updating
+            if returned_article.discarded:
                 continue
             
             # save to article_dicts for later use

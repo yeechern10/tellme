@@ -10,7 +10,7 @@ from uuid import UUID
 import re
 from transformers import AutoTokenizer
 
-from ..pydantic_model import ArticleModel, EventModel, KeywordModel, EventGroupingResult, FirstPassEventResolutionResult
+from ..pydantic_model import ArticleModel, EventModel, KeywordModel, EventGroupingResult, FirstPassEventResolutionResult, EventSummaryResult
 from ..packages.logger import get_logger
 from ..llm.prompts.get_prompt import get_prompt
 
@@ -18,6 +18,36 @@ def json_default(o):
     if isinstance(o, (datetime, date)):
         return o.isoformat()   # aware
     raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
+
+
+def raw_message_json(raw) -> str:
+    """Text JSON from a structured-output raw message.
+
+    include_raw returns an AIMessage. Passing that object to
+    model_validate_json raises a json_type error.
+    """
+    content = getattr(raw, "content", raw)
+    if isinstance(content, list):
+        chunks = []
+        for block in content:
+            if isinstance(block, str):
+                chunks.append(block)
+            elif isinstance(block, dict):
+                chunks.append(str(block.get("text") or block.get("content") or ""))
+            else:
+                text = getattr(block, "text", None)
+                if text:
+                    chunks.append(str(text))
+        content = "".join(chunks)
+    if not isinstance(content, str):
+        content = str(content)
+
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+        text = text.strip()
+    return text
 
 
 def group_articles_by_event(
@@ -49,7 +79,13 @@ def group_articles_by_event(
         logger.info(f"Grouping {len(article_list)} articles into events using model {model_name} from source {model_source}.")
     
     if model_source == "ollama":
-        llm_client = ChatOllama(model=model_name, api_key=api_key)
+        # The model was stopping near 4096 tokens and returning truncated JSON.
+        llm_client = ChatOllama(
+            model=model_name,
+            api_key=api_key,
+            num_ctx=16384,
+            num_predict=8192,
+        )
     else:
         logger.error(f"Unsupported model source: {model_source}")
 
@@ -66,15 +102,15 @@ def group_articles_by_event(
         try:
             response = llm_client.invoke(messages)
             
-            raw_ai_message = response["raw"].content if isinstance(response["raw"], HumanMessage) else response["raw"]
+            raw_ai_message = raw_message_json(response["raw"])
             parsed = response["parsed"]
             parsing_error = response["parsing_error"]
             
             
             if logger:
-                logger.info(f"Raw AI message: {raw_ai_message}")
-                logger.info(f"Parsed AI message: {parsed.model_dump() if parsed else None}")
-                logger.info(f"Parsing error: {parsing_error}")
+                logger.debug(f"Raw AI message: {raw_ai_message}")
+                logger.debug(f"Parsed AI message: {parsed.model_dump() if parsed else None}")
+                logger.debug(f"Parsing error: {parsing_error}")
             
             if parsing_error or not parsed:
                 # If parsing fails, try to parse the raw AI message manually using Pydantic
@@ -155,7 +191,7 @@ def event_resolution(
         try:
             response = llm_client.invoke(messages)
             
-            raw_ai_message = response["raw"].content if isinstance(response["raw"], HumanMessage) else response["raw"]
+            raw_ai_message = raw_message_json(response["raw"])
             parsed = response["parsed"]
             parsing_error = response["parsing_error"]
             
@@ -376,7 +412,7 @@ def event_summary(
             HumanMessage(content="\n".join(content_batch))
         ]
         
-        llm_client = llm_client.with_structured_output(EventModel, include_raw=True)
+        llm_client = llm_client.with_structured_output(EventSummaryResult, include_raw=True)
         
         max_retries = 5
         try_times = 0
@@ -384,13 +420,13 @@ def event_summary(
             try:
                 response = llm_client.invoke(messages)
                 
-                raw_ai_message = response["raw"].content if isinstance(response["raw"], HumanMessage) else response["raw"]
+                raw_ai_message = raw_message_json(response["raw"])
                 parsed = response["parsed"]
                 parsing_error = response["parsing_error"]
                 
                 if parsing_error or not parsed:
                     # If parsing fails, try to parse the raw AI message manually using Pydantic
-                    validated = EventModel.model_validate_json(raw_ai_message)
+                    validated = EventSummaryResult.model_validate_json(raw_ai_message)
                 else:
                     validated = parsed
                 
@@ -398,9 +434,14 @@ def event_summary(
                 event.summary = validated.summary
                 event.confidence_score = validated.confidence_score
                 event.importance_score = validated.importance_score
-                
+
+                # Update article_ids with the new articles
+                event.article_ids.update(new_article_ids)
+                event.new_article_ids.clear()   # clear the new_article_ids to avoid duplicate articles
+
                 if logger:
                     logger.info(f"Updated event {event_id} summary and scores from LLM.")
+                    logger.debug(f"Event {event_id} summary: {validated.summary} confidence score: {validated.confidence_score} importance score: {validated.importance_score}")
                 
                 break  # Exit the retry loop on success
             
@@ -434,7 +475,7 @@ def get_published_at_range(articles, ids, current_start=None, current_end=None):
 
 # def event_restructuring(response, news_list, logger=None):
 #     event_list = []
-#     filtered_articles = []
+#     discarded_articles = []
 #     uncertain_articles = []
 #     try:
 #         data = json.loads(response)
@@ -451,7 +492,7 @@ def get_published_at_range(articles, ids, current_start=None, current_end=None):
 #             logger.warning("No events found in the response.")
 #         else:
 #             print("No events found in the response.")
-#         return event_list, filtered_articles, uncertain_articles
+#         return event_list, discarded_articles, uncertain_articles
     
 #     events = data.get("events")
 #     for event in data:
@@ -479,18 +520,18 @@ def get_published_at_range(articles, ids, current_start=None, current_end=None):
 #             "confidence_score": confidence
 #         })
     
-#     filtered = data.get("filtered_articles", [])
-#     for article in filtered:
-#         # Append the articles to the filtered_articles list
+#     discarded = data.get("discarded_articles", [])
+#     for article in discarded:
+#         # Append the articles to the discarded_articles list
 #         article_id = article.get("article_id") if article.get("article_id") else article.get("id")
 #         reason = article.get("reason")
 #         if not article_id or not reason:
 #             if logger:
-#                 logger.warning(f"Skipping filtered article due to missing article_id or reason: {article}")
+#                 logger.warning(f"Skipping discarded article due to missing article_id or reason: {article}")
 #             else:
-#                 print(f"Skipping filtered article due to missing article_id or reason: {article}")
+#                 print(f"Skipping discarded article due to missing article_id or reason: {article}")
 #             continue
-#         filtered_articles.append({
+#         discarded_articles.append({
 #             "article_id": article_id,
 #             "reason": reason
 #         })
@@ -511,9 +552,9 @@ def get_published_at_range(articles, ids, current_start=None, current_end=None):
 #             "reason": reason
 #         })
     
-#     return event_list, filtered_articles, uncertain_articles
+#     return event_list, discarded_articles, uncertain_articles
 
-# def uncertain_reanalysis(event_dict, filtered_articles, uncertain_articles, articles_dict, content_truncate = UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE,api_key = " ", logger=None):
+# def uncertain_reanalysis(event_dict, discarded_articles, uncertain_articles, articles_dict, content_truncate = UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE,api_key = " ", logger=None):
 #     # Get the content of the uncertain articles
 #     uncertain_article_ids = [article.get("article_id") for article in uncertain_articles]
     
@@ -558,7 +599,7 @@ def get_published_at_range(articles, ids, current_start=None, current_end=None):
     
 #     result = json.loads(response.choices[0].message.content)
     
-#     if "existing_event_updates" not in result or "new_events" not in result or "filtered_articles" not in result:
+#     if "existing_event_updates" not in result or "new_events" not in result or "discarded_articles" not in result:
 #         if logger:
 #             logger.error(f"Unexpected response format from uncertain reanalysis: {result}")
 #         else:
