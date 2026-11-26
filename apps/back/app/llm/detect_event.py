@@ -12,11 +12,10 @@ from transformers import AutoTokenizer
 from psycopg.rows import dict_row
 
 from ..db.update_record import update_event_summary
-from ..packages.raw_message_json import raw_message_json
 from ..db.connect_db import connect_to_postgres
 from ..db.insert_record import insert_events_record, insert_event_article_relationships
-from ..pydantic_model import ArticleModel, EventModel, KeywordModel, EventSummaryResult
-from ..packages.logger import get_logger
+from ..domain.entities import ArticleModel, EventModel, KeywordModel, EventSummaryResult
+from ..packages import get_logger, raw_message_json
 from ..llm.prompts import get_prompt
 from ..llm.embedding import embedding_event
 from ..llm.outputs import EventGroupingResult, FirstPassEventResolutionResult

@@ -8,7 +8,7 @@ from typing import Optional
 from logging import Logger
 
 from ..db.table_schema import ARTICLE_TABLE_FIELDS, KEYWORD_TABLE_FIELDS
-from ..pydantic_model import ArticleModel, EventModel, KeywordModel
+from ..domain.entities import ArticleModel, EventModel, KeywordModel
 
 from ..db.connect_db import connect_to_postgres
 from ..core.config import TABLE_NAMES

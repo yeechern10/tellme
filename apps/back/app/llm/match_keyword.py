@@ -8,10 +8,11 @@ import json
 from ..db.connect_db import connect_to_postgres
 from ..db.update_record import update_event_keywords
 from ..db.insert_record import insert_event_keyword_relationship
-from ..packages.logger import get_logger
-from ..pydantic_model import EventKeywordMatchingResult, EventModel, KeywordModel
+from ..packages import get_logger
+from ..domain.entities import EventModel, KeywordModel
 from ..db.retrieve import get_event_keywords, get_event_similar_keywords
 from ..llm.prompts import get_prompt
+from ..llm.outputs import EventKeywordMatchingResult
 from ..packages.raw_message_json import raw_message_json
 
 

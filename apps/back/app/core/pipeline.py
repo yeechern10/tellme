@@ -5,12 +5,11 @@ from tqdm import tqdm
 from uuid import UUID
 from psycopg.rows import dict_row
 
-from ..pydantic_model import ArticleModel, EventModel, KeywordModel
+from ..domain.entities import ArticleModel, EventModel, KeywordModel
 from ..llm.detect_event import group_articles_by_event, event_resolution, event_summary
 from ..db.retrieve import get_article_event, get_similar_articles
 from ..db.connect_db import connect_to_postgres
-from ..packages.collect_news import collect_article_pipeline
-from ..packages.logger import get_logger
+from ..packages import collect_article_pipeline, get_logger
 from ..llm.match_keyword import match_keywords_to_event
 
 

@@ -2,11 +2,11 @@ import json
 from pathlib import Path
 from psycopg.rows import dict_row
 
-from ..packages.logger import get_logger
+from ..packages import get_logger
 from ..llm.embedding import embedding_keywords
 from ..db.connect_db import connect_to_postgres
 from ..db.insert_record import insert_keyword_record
-from ..pydantic_model import KeywordModel
+from ..domain.entities import KeywordModel
 
 def init_keywords_table():
     with connect_to_postgres() as conn:

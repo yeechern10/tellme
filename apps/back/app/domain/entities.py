@@ -1,7 +1,6 @@
-from enum import Enum
 from typing import Literal, Optional, List, Any, Annotated
 from uuid import UUID
-from pydantic import BaseModel, Field, ConfigDict, model_validator, field_validator, BeforeValidator
+from pydantic import BaseModel, Field, ConfigDict, field_validator, BeforeValidator
 from datetime import datetime
 import json
 

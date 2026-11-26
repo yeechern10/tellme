@@ -10,7 +10,7 @@ import cloudscraper
 from transformers import AutoTokenizer
 from huggingface_hub import login
 
-from ..packages.collect_news import fetch_article_content
+from ..packages import fetch_article_content
 from .system_prompt import article_summarizer, article_summary_schema
 from ..core.config import ARTICLE_SUMMARIZER_MODEL,  ARTICLE_SUMMARIZER_BASE_URL, MAX_ARTICLE_TOKENS
 

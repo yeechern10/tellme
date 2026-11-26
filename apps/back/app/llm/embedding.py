@@ -1,7 +1,7 @@
 from langchain_openai import OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 
-from ..pydantic_model import ArticleModel, EventModel, KeywordModel
+from ..domain.entities import ArticleModel, EventModel, KeywordModel
 from uuid import UUID
 
 from ..core.config import EMBEDDING_MODEL, EMBEDDING_BATCH_SIZE
