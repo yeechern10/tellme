@@ -15,10 +15,12 @@ from ..db.update_record import update_event_summary
 from ..packages.raw_message_json import raw_message_json
 from ..db.connect_db import connect_to_postgres
 from ..db.insert_record import insert_events_record, insert_event_article_relationships
-from ..pydantic_model import ArticleModel, EventModel, KeywordModel, EventGroupingResult, FirstPassEventResolutionResult, EventSummaryResult
+from ..pydantic_model import ArticleModel, EventModel, KeywordModel, EventSummaryResult
 from ..packages.logger import get_logger
-from ..llm.prompts.get_prompt import get_prompt
+from ..llm.prompts import get_prompt
 from ..llm.embedding import embedding_event
+from ..llm.outputs import EventGroupingResult, FirstPassEventResolutionResult
+
 
 def json_default(o):
     if isinstance(o, (datetime, date)):

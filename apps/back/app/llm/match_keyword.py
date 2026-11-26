@@ -11,7 +11,7 @@ from ..db.insert_record import insert_event_keyword_relationship
 from ..packages.logger import get_logger
 from ..pydantic_model import EventKeywordMatchingResult, EventModel, KeywordModel
 from ..db.retrieve import get_event_keywords, get_event_similar_keywords
-from ..llm.prompts.get_prompt import get_prompt
+from ..llm.prompts import get_prompt
 from ..packages.raw_message_json import raw_message_json
 
 
