@@ -28,7 +28,13 @@ def convert_relative_date(delta_t: str, logger: Optional[Logger] =None):
     published_at = None
     
     if delta_t.endswith('ago'):
-        if 'hour' in delta_t:
+        if 'second' in delta_t:
+            seconds = int(delta_t.split()[0])
+            published_at = (current_date - timedelta(seconds=seconds))
+        elif 'minute' in delta_t:
+            minutes = int(delta_t.split()[0])
+            published_at = (current_date - timedelta(minutes=minutes))
+        elif 'hour' in delta_t:
             hours = int(delta_t.split()[0])
             published_at = (current_date - timedelta(hours=hours))
         elif 'day' in delta_t:

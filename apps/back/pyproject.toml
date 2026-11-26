@@ -29,3 +29,13 @@ dependencies = [
 dev = [
     "ipykernel>=7.4.0",
 ]
+
+[project.scripts]
+init-keywords = "app.db.init_keywords_table:main"
+
+[tool.uv]
+package = true
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["logs*", "db*", "tests*"]

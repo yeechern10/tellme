@@ -2,6 +2,7 @@
 -- Extensions
 -- =========================================================
 CREATE EXTENSION IF NOT EXISTS vector;          -- pgvector(for vector search)
+CREATE EXTENSION IF NOT EXISTS ltree;
 
 -- =========================================================
 -- 1. users
@@ -9,8 +10,9 @@ CREATE EXTENSION IF NOT EXISTS vector;          -- pgvector(for vector search)
 CREATE TABLE IF NOT EXISTS users (
     id              UUID PRIMARY KEY DEFAULT uuidv7(),
     username        TEXT NOT NULL UNIQUE,
+    password_hash   TEXT NOT NULL,
     country_code    TEXT,
-    language        TEXT,
+    user_language   TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -22,37 +24,82 @@ CREATE TABLE IF NOT EXISTS keywords (
     source_id       TEXT UNIQUE,    -- unique identifier for the keyword from the source
     label           TEXT NOT NULL,
     definition      TEXT,
+    parent_id       UUID REFERENCES keywords(id) ON DELETE SET NULL,
     synonyms        TEXT[],  -- array of synonyms
     keyword_type    TEXT,
     embedding       vector(	1024),  -- for BAAI/bge-m3
+    path            ltree NOT NULL,      -- for hierarchical relationships
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_updated    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- =========================================================
--- 3. keyword_relationships
--- =========================================================
-CREATE TABLE keyword_relations (
-    parent_id UUID REFERENCES keywords(id) ON DELETE CASCADE,
-    child_id  UUID REFERENCES keywords(id) ON DELETE CASCADE,
-    PRIMARY KEY (parent_id, child_id)
-);
+-- create GIST index for ltree path to support hierarchical queries
+CREATE INDEX IF NOT EXISTS idx_keywords_path_gist ON keywords USING GIST (path);
+CREATE INDEX IF NOT EXISTS idx_keywords_parent_id ON keywords (parent_id);
+
+
+-- create a trigger to automatically set the path of a keyword based on its parent_id
+CREATE OR REPLACE FUNCTION keywords_set_path()
+RETURNS TRIGGER AS $$
+DECLARE
+    parent_path ltree;
+BEGIN
+    -- use the keyword's id as the path segment, replacing '-' with '_' to conform to ltree format
+    NEW.path := replace(NEW.id::text, '-', '_')::ltree;
+
+    IF NEW.parent_id IS NOT NULL THEN
+        SELECT path INTO parent_path FROM keywords WHERE id = NEW.parent_id;
+        IF parent_path IS NULL THEN
+            RAISE EXCEPTION 'parent_id % not found', NEW.parent_id;
+        END IF;
+        NEW.path := parent_path || NEW.path;
+    END IF;
+
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_keywords_set_path
+BEFORE INSERT OR UPDATE OF parent_id ON keywords
+FOR EACH ROW
+EXECUTE FUNCTION keywords_set_path();
+
+-- if a keyword's path changes, update the paths of all its descendants to reflect the new hierarchy
+CREATE OR REPLACE FUNCTION keywords_cascade_path()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.path IS DISTINCT FROM OLD.path THEN
+        UPDATE keywords
+        SET path = NEW.path || subpath(path, nlevel(OLD.path))
+        WHERE path <@ OLD.path
+          AND id <> NEW.id;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_keywords_cascade_path
+AFTER UPDATE OF path ON keywords
+FOR EACH ROW
+EXECUTE FUNCTION keywords_cascade_path();
 
 -- =========================================================
--- 4. user_keywords
+-- 3. user_keywords
 --    relationship table between users and keywords, with interest level.
 -- =========================================================
 CREATE TABLE IF NOT EXISTS user_keywords (
     user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     keyword_id      UUID   NOT NULL REFERENCES keywords(id) ON DELETE CASCADE,
-    interest_level  INTEGER,
+    interest_level  REAL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_updated    TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (user_id, keyword_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_user_keywords_user ON user_keywords(user_id);
+
 -- =========================================================
--- 5. articles
+-- 4. articles
 -- =========================================================
 CREATE TABLE IF NOT EXISTS articles (
     id              UUID PRIMARY KEY DEFAULT uuidv7(),
@@ -80,7 +127,7 @@ CREATE INDEX IF NOT EXISTS idx_articles_embedding
 -- TODO: Consider use url hash as unique identifier if using mutiple db
 
 -- =========================================================
--- 6. events
+-- 5. events
 -- =========================================================
 CREATE TABLE IF NOT EXISTS events (
     id                          UUID PRIMARY KEY DEFAULT uuidv7(),
@@ -89,14 +136,14 @@ CREATE TABLE IF NOT EXISTS events (
     published_at_range_start    TIMESTAMPTZ,
     published_at_range_end      TIMESTAMPTZ,
     confidence_score            REAL,
-    importance_score            INTEGER,
+    importance_score            REAL,
     embedding                   vector(1024),  -- for BAAI/bge-m3
     created_at                  TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_updated                TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- =========================================================
--- 7. user_article_interactions
+-- 6. user_article_interactions
 -- =========================================================
 CREATE TABLE IF NOT EXISTS user_article_interactions (
     user_id              UUID NOT NULL REFERENCES users(id)    ON DELETE CASCADE,
@@ -110,7 +157,7 @@ CREATE INDEX IF NOT EXISTS idx_uai_user    ON user_article_interactions(user_id)
 CREATE INDEX IF NOT EXISTS idx_uai_article ON user_article_interactions(article_id);
 
 -- =========================================================
--- 8. user_event_interactions
+-- 7. user_event_interactions
 -- =========================================================
 CREATE TABLE IF NOT EXISTS user_event_interactions (
     user_id              UUID NOT NULL REFERENCES users(id)  ON DELETE CASCADE,
@@ -121,7 +168,7 @@ CREATE TABLE IF NOT EXISTS user_event_interactions (
 );
 
 -- =========================================================
--- 9. event_article_relationships
+-- 8. event_article_relationships
 -- =========================================================
 CREATE TABLE IF NOT EXISTS event_article_relationships (
     event_id   UUID NOT NULL REFERENCES events(id)   ON DELETE CASCADE,
@@ -132,13 +179,16 @@ CREATE TABLE IF NOT EXISTS event_article_relationships (
 CREATE INDEX IF NOT EXISTS idx_ear_article ON event_article_relationships(article_id);
 
 -- =========================================================
--- 10. events_keywords_relationships
+-- 9. event_keyword_relationships
 -- =========================================================
-CREATE TABLE IF NOT EXISTS events_keywords_relationships (
+CREATE TABLE IF NOT EXISTS event_keyword_relationships (
     event_id        UUID NOT NULL REFERENCES events(id)   ON DELETE CASCADE,
     keyword_id      UUID   NOT NULL REFERENCES keywords(id) ON DELETE CASCADE,
-    relevance_score INTEGER,
+    relevance_score REAL,
+    reason          TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_updated    TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (event_id, keyword_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_ekr_keyword ON events_keywords_relationships(keyword_id);
+CREATE INDEX IF NOT EXISTS idx_ekr_keyword ON event_keyword_relationships(keyword_id);

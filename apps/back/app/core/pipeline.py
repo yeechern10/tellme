@@ -1,14 +1,17 @@
 import pandas as pd
 from typing import Optional, Literal
-from logging import Logger
+from logging import Logger, INFO, DEBUG
 from tqdm import tqdm
+from uuid import UUID
+from psycopg.rows import dict_row
 
-from ..pydantic_model import ArticleModel, EventModel
-from ..llm.detect_event import group_articles_by_event, event_resolution
+from ..pydantic_model import ArticleModel, EventModel, KeywordModel
+from ..llm.detect_event import group_articles_by_event, event_resolution, event_summary
 from ..db.retrieve import get_article_event, get_similar_articles
 from ..db.connect_db import connect_to_postgres
 from ..packages.collect_news import collect_article_pipeline
 from ..packages.logger import get_logger
+from ..llm.match_keyword import match_keywords_to_event
 
 
 def articles_request_event_pipeline(
@@ -20,15 +23,25 @@ def articles_request_event_pipeline(
     article_event_grouping_model: str,
     article_event_grouping_model_source: str,
     article_event_grouping_model_api_key: str,
-    first_pass_event_resolution_model: str,
-    first_pass_event_resolution_model_source: str,
-    first_pass_event_resolution_model_api_key: str,
-    logger: Optional[Logger]=None):
+    event_resolution_model: str,
+    event_resolution_model_source: str,
+    event_resolution_model_api_key: str,
+    event_summary_model: str,
+    event_summary_model_source: str,
+    event_summary_model_api_key: str,
+    event_summary_max_output_tokens: int,
+    event_keyword_matching_model: str,
+    event_keyword_matching_model_source: str,
+    event_keyword_matching_model_api_key: str,
+    log_level: int = INFO,
+    logger: Optional[Logger]=None,
+    ) -> list[EventModel]:
     if logger is None:
-        logger = get_logger(__name__)
+        logger = get_logger(__name__, log_level=log_level)
     
-    ARTICLES_DICT = {}
-    EVENTS_DICT = {}
+    ARTICLES_DICT : dict[UUID, ArticleModel] = {}
+    EVENTS_DICT : dict[UUID, EventModel] = {}
+    KEYWORDS_DICT : dict[UUID, KeywordModel] = {}
     print(f'pipeline started')
     
     
@@ -57,7 +70,7 @@ def articles_request_event_pipeline(
     
     logger.info(f"Collecting similar articles and related events from db.")
     with connect_to_postgres() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor( row_factory=dict_row )
         for article_id in to_process_article_ids:
             article = ARTICLES_DICT.get(article_id)
             if not article:
@@ -135,7 +148,7 @@ def articles_request_event_pipeline(
     if group_result.get('uncertain_articles'):
         uncertainty_article_ids.update([article_ref_id_map[article['article_ref']] for article in group_result['uncertain_articles']])
                 
-    logger.info(f"Event grouping completed. {len(event_groups)} event groups, {len(group_result.get('discarded_articles'))} non-event articles, {len(uncertainty_article_ids)} uncertain articles.")
+    logger.info(f"Event grouping completed. {len(event_groups)} event groups, {len(group_result.get('discarded_articles',[]))} non-event articles, {len(uncertainty_article_ids)} uncertain articles.")
     
     updated_event_ids = set()
     new_event_ids = set()
@@ -157,23 +170,23 @@ def articles_request_event_pipeline(
             if similar_article:
                 similar_event_ids.update(similar_article.event_ids)
         
-        # first pass event resolution
-        first_pass_result = event_resolution(
+        # event resolution
+        resolution_result = event_resolution(
             grouped_article_ids=grouped_artilce_ids,
             similar_article_event_ids=similar_event_ids,
             same_batch_event_ids=same_batch_event_ids,
             articles_dict=ARTICLES_DICT,
             events_dict=EVENTS_DICT,
-            model_name=first_pass_event_resolution_model,
-            model_source=first_pass_event_resolution_model_source,
-            api_key=first_pass_event_resolution_model_api_key,
+            model_name=event_resolution_model,
+            model_source=event_resolution_model_source,
+            api_key=event_resolution_model_api_key,
             prompt_version="latest",
             logger=logger
         )
         
         # update events_dict with new article_ids from match_candidate
-        if first_pass_result["match_candidate"]:
-            for match in first_pass_result["match_candidate"]:
+        if resolution_result["match_candidate"]:
+            for match in resolution_result["match_candidate"]:
                 event_ref = match["event_ref"]
                 event_id = event_ref_id_map.get(event_ref)
                 if event_id:
@@ -181,15 +194,15 @@ def articles_request_event_pipeline(
                     EVENTS_DICT[event_id].new_article_ids.update([article_ref_id_map[ref] for ref in match["article_refs"]])
                     
         # update events_dict with new article_ids from create_new
-        if first_pass_result["create_new"]:
-            for new_event in first_pass_result["create_new"]:
+        if resolution_result["create_new"]:
+            for new_event in resolution_result["create_new"]:
                 new_event_id = f"new_event_{len(new_event_ids) + 1}"
                 new_event_ids.add(new_event_id)
                 
-                EVENTS_DICT[new_event_id] = EventModel({
+                EVENTS_DICT[new_event_id] = EventModel(**{
                     "title": new_event["event_title"],
                     "article_ids": set([article_ref_id_map[ref] for ref in new_event["article_refs"]]),
-                    "new_article_ids": set(),
+                    "new_article_ids": set( [article_ref_id_map[ref] for ref in new_event["article_refs"]] ),
                     "ref_id": new_event["temporary_event_id"]
                 })
                 
@@ -197,17 +210,58 @@ def articles_request_event_pipeline(
                 same_batch_event_ids.add(new_event_id)
         
         # update uncertainty_article_ids with new uncertain articles
-        if first_pass_result["uncertain_articles"]:
-            uncertainty_article_ids.update([article_ref_id_map[article["article_ref"]] for article in first_pass_result["uncertain_articles"]])
+        if resolution_result["uncertain_articles"]:
+            uncertainty_article_ids.update([article_ref_id_map[article["article_ref"]] for article in resolution_result["uncertain_articles"]])
+            
+    # resolve uncertainty articles, if any
+    # if uncertainty_article_ids:
+    #     for article_id in uncertainty_article_ids:
+    # TODO: implement uncertainty article resolution logic here
             
             
             
-    #  Event Summary Agent
-    
+    # Event Summary Agent
+    logger.info("Starting event summary...")
+    for event_id in tqdm(updated_event_ids| new_event_ids, desc="Event Summary"):
+        event_summary(
+            event_id=event_id,
+            event_dict=EVENTS_DICT,
+            articles_dict=ARTICLES_DICT,
+            model_name=event_summary_model,
+            model_source=event_summary_model_source,
+            api_key=event_summary_model_api_key,
+            prompt_version="latest",
+            max_output_tokens=event_summary_max_output_tokens,
+            logger=logger
+        )
 
-            
+    logger.info("Event summary completed.")
+    
+    # Match keywords to events
+    logger.info("Starting keyword matching to events...")
+    for event_id in tqdm(updated_event_ids| new_event_ids, desc="Keyword Matching"):
+        match_keywords_to_event(
+            event_id=event_id,
+            event_dict=EVENTS_DICT,
+            keywords_dict=KEYWORDS_DICT,
+            model_name=event_keyword_matching_model,
+            model_source=event_keyword_matching_model_source,
+            api_key=event_keyword_matching_model_api_key,
+            prompt_version="latest",
+            logger=logger
+        )
+    logger.info("Keyword matching to events completed.")
+    
+    # Return event
+    event_output : list[EventModel] = []
+    for event_id in existed_event_ids | updated_event_ids| new_event_ids:
+        event_output.append(EVENTS_DICT.get(event_id))
+    
+    logger.info(f"Pipeline completed. {len(event_output)} events generated.")
+    
+    return event_output
+    
         
 
     
-    return first_pass_result
 

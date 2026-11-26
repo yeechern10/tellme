@@ -9,45 +9,22 @@ from logging import Logger
 from uuid import UUID
 import re
 from transformers import AutoTokenizer
+from psycopg.rows import dict_row
 
+from ..db.update_record import update_event_summary
+from ..packages.raw_message_json import raw_message_json
+from ..db.connect_db import connect_to_postgres
+from ..db.insert_record import insert_events_record, insert_event_article_relationships
 from ..pydantic_model import ArticleModel, EventModel, KeywordModel, EventGroupingResult, FirstPassEventResolutionResult, EventSummaryResult
 from ..packages.logger import get_logger
 from ..llm.prompts.get_prompt import get_prompt
+from ..llm.embedding import embedding_event
 
 def json_default(o):
     if isinstance(o, (datetime, date)):
         return o.isoformat()   # aware
     raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
 
-
-def raw_message_json(raw) -> str:
-    """Text JSON from a structured-output raw message.
-
-    include_raw returns an AIMessage. Passing that object to
-    model_validate_json raises a json_type error.
-    """
-    content = getattr(raw, "content", raw)
-    if isinstance(content, list):
-        chunks = []
-        for block in content:
-            if isinstance(block, str):
-                chunks.append(block)
-            elif isinstance(block, dict):
-                chunks.append(str(block.get("text") or block.get("content") or ""))
-            else:
-                text = getattr(block, "text", None)
-                if text:
-                    chunks.append(str(text))
-        content = "".join(chunks)
-    if not isinstance(content, str):
-        content = str(content)
-
-    text = content.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s*```$", "", text)
-        text = text.strip()
-    return text
 
 
 def group_articles_by_event(
@@ -157,7 +134,7 @@ def event_resolution(
         "event_title": events_dict[event_id].title,
         "event_summary": events_dict[event_id].summary,
         "published_at_range": [events_dict[event_id].published_at_range_start, events_dict[event_id].published_at_range_end],
-        "representative_article": [articles_dict[article_id].title for article_id in events_dict[event_id].article_ids[:5] if article_id in articles_dict]
+        "representative_article": [articles_dict[article_id].title for article_id in list(events_dict[event_id].article_ids)[:5] if article_id in articles_dict]
     } for event_id in similar_article_event_ids]
     
     same_batch_events = [{
@@ -165,7 +142,7 @@ def event_resolution(
         "event_title": events_dict[event_id].title,
         "event_summary": events_dict[event_id].summary,
         "published_at_range": [events_dict[event_id].published_at_range_start, events_dict[event_id].published_at_range_end],
-        "representative_article": [articles_dict[article_id].title for article_id in events_dict[event_id].article_ids[:5] if article_id in articles_dict]
+        "representative_article": [articles_dict[article_id].title for article_id in list(events_dict[event_id].article_ids)[:5] if article_id in articles_dict]
     } for event_id in same_batch_event_ids]
     
     content = {
@@ -362,6 +339,21 @@ def get_contents(
 
     return contents
 
+def get_published_at_range(
+    event: EventModel,
+    articles: dict[UUID, ArticleModel],
+    current_start=None, current_end=None
+    ):
+    for id in event.article_ids:
+        article = articles.get(id)
+        if article:
+            published_at = article.published_at
+            if published_at:
+                if current_start is None or published_at < current_start:
+                    current_start = published_at
+                if current_end is None or published_at > current_end:
+                    current_end = published_at
+    return current_start, current_end
 
 def event_summary(
     event_id: UUID|str,
@@ -400,11 +392,12 @@ def event_summary(
     )
     
     if model_source == "ollama":
-        llm_client = ChatOllama(model=model_name, api_key=api_key)
+        llm_client = ChatOllama(model=model_name, api_key=api_key, max_output_tokens=max_output_tokens)
     else:
         if logger:
             logger.error(f"Unsupported model source: {model_source}")
         raise ValueError(f"Unsupported model source: {model_source}")
+    llm_client = llm_client.with_structured_output(EventSummaryResult, include_raw=True)
     
     for content_batch in contents:
         messages=[
@@ -412,7 +405,6 @@ def event_summary(
             HumanMessage(content="\n".join(content_batch))
         ]
         
-        llm_client = llm_client.with_structured_output(EventSummaryResult, include_raw=True)
         
         max_retries = 5
         try_times = 0
@@ -434,10 +426,10 @@ def event_summary(
                 event.summary = validated.summary
                 event.confidence_score = validated.confidence_score
                 event.importance_score = validated.importance_score
+                event.published_at_range_start, event.published_at_range_end = get_published_at_range(event, articles_dict, event.published_at_range_start, event.published_at_range_end)
 
                 # Update article_ids with the new articles
                 event.article_ids.update(new_article_ids)
-                event.new_article_ids.clear()   # clear the new_article_ids to avoid duplicate articles
 
                 if logger:
                     logger.info(f"Updated event {event_id} summary and scores from LLM.")
@@ -456,163 +448,23 @@ def event_summary(
             raise Exception("Failed to get a valid response from the LLM after multiple attempts.")
     
     
+    # Embedding event title and summary for future vector search
+    embedding_event(event)
+    
+    with (connect_to_postgres() as conn, conn.transaction()):
+        cursor = conn.cursor(row_factory=dict_row )
+        if not event.id :
+            # if the event has no ID, it means it's a new event, insert it into the db
+            insert_events_record(cursor, event, logger=logger)
+    
+        else:
+            # if the event already exists, update it in the db
+            update_event_summary(cursor, event, logger=logger)
+            
+        # save the event-article relationships into the database
+        insert_event_article_relationships(cursor, event, logger=logger)
+ 
 
-        
-
-    
-def get_published_at_range(articles, ids, current_start=None, current_end=None):
-    for id in ids:
-        article = articles.get(id)
-        if article:
-            published_at = article.get("published_at")
-            if published_at:
-                if current_start is None or published_at < current_start:
-                    current_start = published_at
-                if current_end is None or published_at > current_end:
-                    current_end = published_at
-    return current_start, current_end
-
-
-# def event_restructuring(response, news_list, logger=None):
-#     event_list = []
-#     discarded_articles = []
-#     uncertain_articles = []
-#     try:
-#         data = json.loads(response)
-#     except json.JSONDecodeError as e:
-#         if logger:
-#             logger.error(f"Error during event restructuring: {e}")
-#         else:
-#             print(f"Error during event restructuring: {e}")
-#         return None    
-
-#     data = data.get("events")
-#     if not data:
-#         if logger:
-#             logger.warning("No events found in the response.")
-#         else:
-#             print("No events found in the response.")
-#         return event_list, discarded_articles, uncertain_articles
-    
-#     events = data.get("events")
-#     for event in data:
-#         try:
-#             event_title = event["event_title"]
-#             article_ids = event["article_ids"]
-#             confidence = event["confidence_score"]
-#         except KeyError as e:
-#             if logger:
-#                 logger.error(f"Error occurred while extracting event data: {e}. Event data: {event}")
-#             else:
-#                 print(f"Skipping event due to missing title or articles: {event}")
-#             continue
-        
-#         # Get the published_at range for the articles in this event
-#         published_at_range_start, published_at_range_end = get_published_at_range(news_list, article_ids)
-        
-        
-#         # Append the event to the event_list
-#         event_list.append({
-#             "event_title": event_title,
-#             "article_ids": article_ids,
-#             "published_at_range_start": published_at_range_start,
-#             "published_at_range_end": published_at_range_end,
-#             "confidence_score": confidence
-#         })
-    
-#     discarded = data.get("discarded_articles", [])
-#     for article in discarded:
-#         # Append the articles to the discarded_articles list
-#         article_id = article.get("article_id") if article.get("article_id") else article.get("id")
-#         reason = article.get("reason")
-#         if not article_id or not reason:
-#             if logger:
-#                 logger.warning(f"Skipping discarded article due to missing article_id or reason: {article}")
-#             else:
-#                 print(f"Skipping discarded article due to missing article_id or reason: {article}")
-#             continue
-#         discarded_articles.append({
-#             "article_id": article_id,
-#             "reason": reason
-#         })
-    
-#     uncertain = data.get("uncertain_articles", [])
-#     for article in uncertain:
-#         # Append the articles to the uncertain_articles list
-#         article_id = article.get("article_id") if article.get("article_id") else article.get("id")
-#         reason = article.get("reason")
-#         if not article_id or not reason:
-#             if logger:
-#                 logger.warning(f"Skipping uncertain article due to missing article_id or reason: {article}")
-#             else:
-#                 print(f"Skipping uncertain article due to missing article_id or reason: {article}")
-#             continue
-#         uncertain_articles.append({
-#             "article_id": article_id,
-#             "reason": reason
-#         })
-    
-#     return event_list, discarded_articles, uncertain_articles
-
-# def uncertain_reanalysis(event_dict, discarded_articles, uncertain_articles, articles_dict, content_truncate = UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE,api_key = " ", logger=None):
-#     # Get the content of the uncertain articles
-#     uncertain_article_ids = [article.get("article_id") for article in uncertain_articles]
-    
-#     input_content = {
-#         "existing_events": [],
-#         "uncertain_articles": []
-#     }
-    
-#     for event in event_dict.values():
-#         published_at_range = f"{event.get('published_at_range_start').strftime('%Y-%m-%d %H:%M:%S')} - {event.get('published_at_range_end').strftime('%Y-%m-%d %H:%M:%S')}" if event.get('published_at_range_start') and event.get('published_at_range_end') else None
-        
-#         input_content["existing_events"].append({
-#             "event_id": event.get("event_id"),
-#             "event_title": event.get("event_title"),
-#             "published_at_range": published_at_range,
-#             "confidence_score": event.get("confidence_score"),
-#             "article_titles": [articles_dict.get(article_id).get("title") for article_id in event.get("article_ids") if articles_dict.get(article_id)]
-#         })
-    
-#     for uncertain_article in uncertain_articles:
-#         article_id = uncertain_article.get("article_id")
-#         article = articles_dict.get(article_id)
-#         if article:
-#             input_content["uncertain_articles"].append({
-#                 "article_id": article_id,
-#                 "title": article.get("title"),
-#                 "content": article.get("content")[:content_truncate] if article.get("content") else None,  # Limit content to first 2000 characters
-#                 "source_name": article.get("source"),
-#                 "published_at": article.get("published_at"),
-#             })
-    
-#     llm_client = openai.OpenAI(api_key=api_key, base_url=EVENT_DETECTOR_BASE_URL)
-#     system_prompt = get_prompt("uncertain_reanalysis_detector", version="latest")
-#     response = llm_client.chat.completions.create(
-#         model=EVENT_DETECTOR_MODEL,
-#         messages=[
-#             {"role": "system", "content": system_prompt},
-#             {"role": "user", "content": json.dumps(input_content)}
-#         ],
-#         response_format={"type": "json_object"},
-#     )
-    
-#     result = json.loads(response.choices[0].message.content)
-    
-#     if "existing_event_updates" not in result or "new_events" not in result or "discarded_articles" not in result:
-#         if logger:
-#             logger.error(f"Unexpected response format from uncertain reanalysis: {result}")
-#         else:
-#             print(f"Unexpected response format from uncertain reanalysis: {result}")
-#         return None, None
-    
-#     for event_update in result["existing_event_updates"]:
-#         event_id = event_update.get("event_id")
-#         event_dict[event_id]["article_ids"].extend(event_update.get("new_article_ids", []))
-#         event_dict[event_id]["confidence_score"] = event_update.get("updated_confidence")
-    
-    
-    
-    
-    
-   
+                
+            
+                

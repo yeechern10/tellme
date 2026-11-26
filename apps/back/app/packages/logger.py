@@ -1,13 +1,22 @@
 import logging
 from pathlib import Path
 
-def get_logger(name: str, log_file: str = None) -> logging.Logger:
+def get_logger(name: str, log_file: str = None, log_level: int = logging.INFO) -> logging.Logger:
+    """
+    Get a logger with the given name and log level.
+    Args:
+        name: The name of the logger.
+        log_file: The file to log to.
+        log_level: The level to log at.
+    Returns:
+        A logger with the given name and log level.
+    """
     logger = logging.getLogger(name)
 
     if logger.hasHandlers():
         return logger
 
-    logger.setLevel(logging.INFO)
+    logger.setLevel(log_level)
 
     # log directory
     log_dir = Path(__file__).parent.parent.parent / "logs"

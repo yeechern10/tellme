@@ -1,8 +1,9 @@
 from enum import Enum
 from typing import Literal, Optional, List
 from uuid import UUID
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, field_validator
 from datetime import datetime
+import json
 
 class KeywordModel(BaseModel):
     model_config = ConfigDict(extra="ignore")  # Ignore extra fields not defined in the model
@@ -11,16 +12,29 @@ class KeywordModel(BaseModel):
     source_id: Optional[str] = Field(None, description="The source ID of the keyword")
     label: str = Field(..., description="The label of the keyword")
     definition: Optional[str] = Field(None, description="The definition of the keyword")
+    parent_id: Optional[UUID] = Field(None, description="The parent UUID of the keyword")
     synonyms: Optional[list[str]] = Field(None, description="The synonyms of the keyword")
     type: Literal["iptc_media_topic", "location", "custom"] | None = Field(None, description="The type of the keyword")
     embedding: Optional[list[float]] = Field(None, description="The embedding of the keyword")
+    path: Optional[str] = Field(None, description="The hierarchical path of the keyword in ltree format")
     created_at: Optional[datetime] = Field(None, description="The creation timestamp of the keyword")
     last_updated: Optional[datetime] = Field(None, description="The last updated timestamp of the keyword")
     embedded: bool = Field(False, description="Whether the keyword has been embedded")
-    parent: Optional[UUID] = Field(None, description="The parent UUID of the keyword")
     parent_source_id: Optional[str] = Field(None, description="The parent source ID of the keyword")
     children: list[UUID] | None = Field(None, description="The children UUIDs of the keyword")
     children_source_ids: list[str] | None = Field(None, description="The children source IDs of the keyword")
+    ref_id: Optional[str] = Field(None, description="The reference ID of the keyword, e.g. 'K_1', 'K_2'")
+    path_str: Optional[str] = Field(None, description="The hierarchical path of the keyword in human-readable format, e.g. 'Parent > Child > Subchild'")
+    
+    @field_validator("embedding", mode="before")
+    @classmethod
+    def parse_embedding(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return [float(x) for x in v.strip("{}[]").split(",") if x.strip()]
+        return v
     
 class ArticleModel(BaseModel):
     model_config = ConfigDict(extra="ignore")  # Ignore extra fields not defined in the model
@@ -45,6 +59,16 @@ class ArticleModel(BaseModel):
     discarded_reason: Optional[str] = Field(None, description="The reason why the article was discarded during event detection")
     ref_id: Optional[str] = Field(None, description="The reference ID of the article, e.g. 'A_1', 'A_2'")
     simlilar_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the similar articles associated with the article")
+    
+    @field_validator("embedding", mode="before")
+    @classmethod
+    def parse_embedding(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return [float(x) for x in v.strip("{}[]").split(",") if x.strip()]
+        return v
 
 class EventModel(BaseModel):
     model_config = ConfigDict(extra="ignore")  # Ignore extra fields not defined in the model
@@ -55,7 +79,7 @@ class EventModel(BaseModel):
     published_at_range_start: Optional[datetime] = Field(None, description="The time of the event first published")
     published_at_range_end: Optional[datetime] = Field(None, description="The time of the event last published")
     confidence_score: Optional[float] = Field(None, description="The confidence score of the event")
-    importance_score: Optional[int] = Field(None, description="The importance score of the event")
+    importance_score: Optional[float] = Field(None, description="The importance score of the event")
     embedding: list[float] | None = Field(None, description="The embedding of the event")
     created_at: Optional[datetime] = Field(None, description="The creation timestamp of the event")
     last_updated: Optional[datetime] = Field(None, description="The last updated timestamp of the event")
@@ -63,6 +87,17 @@ class EventModel(BaseModel):
     article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the articles associated with the event")
     ref_id: Optional[str] = Field(None, description="The reference ID of the event, e.g. 'E_1', 'E_2'")
     new_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the new articles assigned to the event")
+    keyword_id_relevance_score_dict: dict[UUID, float] = Field(default_factory=dict, description="The UUIDs of the keywords associated with the event and their relevance scores")
+    
+    @field_validator("embedding", mode="before")
+    @classmethod
+    def parse_embedding(cls, v):
+        if isinstance(v, str):
+            try:
+                return json.loads(v)
+            except json.JSONDecodeError:
+                return [float(x) for x in v.strip("{}[]").split(",") if x.strip()]
+        return v
     
     
 ### llm structured output models for event detection and grouping
@@ -169,3 +204,11 @@ class EventSummaryResult(BaseModel):
         default_factory=list,
         description="Limitations of the supplied evidence that may affect the summary, confidence, or importance scores.",
     )
+
+class MatchedKeyword(BaseModel):
+    keyword_ref: str = Field(description="The reference ID of the matched keyword, e.g. 'K_1', 'K_2'")
+    relevance_score: float = Field(ge=0.0, le=1.0, description="The relevance score of the matched keyword to the event, from 0.0 to 1.0")
+    reason: str = Field(description="A brief explanation based on the event and keyword definition, e.g. 'directly mentioned in title', 'related to event summary'")
+
+class EventKeywordMatchingResult(BaseModel):
+    keyword_matches: List[MatchedKeyword] = Field(default_factory=list, description="A list of matched keywords with their reference IDs, relevance scores, and reasons for matching.")

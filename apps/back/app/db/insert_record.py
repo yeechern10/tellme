@@ -12,7 +12,7 @@ from logging import Logger
 
 from ..pydantic_model import KeywordModel, ArticleModel, EventModel
 from .connect_db import connect_to_postgres
-from ..db.table_schema import ARTICLE_TABLE_FIELDS
+from ..db.table_schema import ARTICLE_TABLE_FIELDS, EVENT_TABLE_FIELDS, KEYWORD_TABLE_FIELDS
 from ..configuration import TABLE_NAMES
 
 def get_conflict_condition(error_message: str):
@@ -29,28 +29,30 @@ def get_conflict_condition(error_message: str):
     return None
 
 
-def insert_keywords_record(
+def insert_keyword_record(
     cursor: Cursor,
     keyword_label: str, 
     keyword_type: Literal["iptc_media_topic", "location", "custom"] | None = None,
     keyword_source_id: Optional[str] = None, 
     keyword_definition: Optional[str] = None, 
     keyword_synonyms: Optional[list] = None, 
+    keyword_parent_id: Optional[uuid.UUID] = None,
     keyword_embedding: list[float] = None, 
     logger: Optional[Logger] = None
-    ):
-    returning_fields = ", ".join(["id", "source_id", "label", "definition", "synonyms", "type", "embedding", "created_at", "last_updated"])
+    ) -> Optional[KeywordModel]:
+    returning_fields = ", ".join(KEYWORD_TABLE_FIELDS)
     
     try:
         cursor.execute(f"""
             INSERT INTO {TABLE_NAMES['keywords']} 
-            (source_id, label, definition, synonyms, keyword_type, embedding)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            (source_id, label, definition, parent_id, synonyms, keyword_type, embedding)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING {returning_fields}
         """, (
             keyword_source_id,
             keyword_label,
             keyword_definition,
+            keyword_parent_id,
             keyword_synonyms,
             keyword_type,
             keyword_embedding
@@ -58,8 +60,8 @@ def insert_keywords_record(
         result = cursor.fetchone()
         if result:
             result['embedded'] = True if result.pop('embedding') is not None else False
-            return KeywordModel(**result), True
-        return None, False
+            return KeywordModel(**result)
+        return None
     except errors.UniqueViolation as e:
         if logger:
             logger.error(f"Error inserting keyword {keyword_source_id} {keyword_label}: {e.diag.message_detail}")
@@ -77,16 +79,90 @@ def insert_keywords_record(
                     existing_record = new_cursor.fetchone()
                     existing_record['embedded'] = True if existing_record.pop('embedding') is not None else False
                     if logger:
-                        logger.info(f"Existing record: {existing_record}")
+                        logger.debug(f"Existing record: {existing_record.get('label')} with ID {existing_record.get('id')}")
                     
-                    return KeywordModel(**existing_record), False
-        return None, False
+                    return KeywordModel(**existing_record)
+        return None
     except errors.IntegrityError as e:
         if logger:
             logger.error(f"Integrity error inserting keyword {keyword_source_id} {keyword_label}: {e.diag.message_detail}")
-        return None, False
+        return None
             
+def insert_event_keyword_relationship(
+    cursor: Cursor,
+    event_id: uuid.UUID,
+    keyword_id: uuid.UUID,
+    relevance_score: float,
+    reason: Optional[str] = None,
+    logger: Optional[Logger] = None
+) -> bool:
+    try:
+        cursor.execute(f"""
+            INSERT INTO {TABLE_NAMES['event_keyword_relationships']} 
+            (event_id, keyword_id, relevance_score, reason)
+            VALUES (%s, %s, %s, %s)
+        """, (
+            event_id,
+            keyword_id,
+            relevance_score,
+            reason
+        ))
+        if logger:
+            logger.info(f"Inserted event-keyword relationship for event {event_id} and keyword {keyword_id}.")
+        return True
+    except errors.UniqueViolation as e:
+        if logger:
+            logger.error(f"Error inserting event-keyword relationship for event {event_id} and keyword {keyword_id}: {e.diag.message_detail}")
+        return False
+    except errors.IntegrityError as e:
+        if logger:
+            logger.error(f"Integrity error inserting event-keyword relationship for event {event_id} and keyword {keyword_id}: {e.diag.message_detail}")
+        return False
+    except Exception as e:
+        if logger:
+            logger.error(f"Unexpected error inserting event-keyword relationship for event {event_id} and keyword {keyword_id}: {e}")
+        return False
 
+def insert_event_article_relationships(
+    cursor: Cursor,
+    event: EventModel,
+    logger: Optional[Logger] = None
+) -> bool:
+    event_article_pairs = []
+    if not event.new_article_ids:
+        if logger:
+            logger.info(f"No new articles to insert for event {event.id}.")
+        return True  # Nothing to insert, but not an error
+    
+    for article_id in event.new_article_ids:
+        event_article_pairs.append((event.id, article_id))
+    
+    row_placeholder = "(%s, %s)"
+    placeholders = ", ".join([row_placeholder] * len(event_article_pairs))
+
+    # flatten the list of tuples for the execute method
+    flat_params = [v for pair in event_article_pairs for v in pair]
+
+    try:
+        cursor.execute(f"""
+            INSERT INTO {TABLE_NAMES['event_article_relationships']} 
+            (event_id, article_id)
+            VALUES {placeholders}
+            ON CONFLICT (event_id, article_id) DO NOTHING
+        """, flat_params)
+        return True
+    except errors.UniqueViolation as e:
+        if logger:
+            logger.error(f"Error inserting event-article relationships for event {event.id}: {e.diag.message_detail}")
+        return False
+    except errors.IntegrityError as e:
+        if logger:
+            logger.error(f"Integrity error inserting event-article relationships for event {event.id}: {e.diag.message_detail}")
+        return False
+    except Exception as e:
+        if logger:
+            logger.error(f"Unexpected error inserting event-article relationships for event {event.id}: {e}")
+        return False
 
 def insert_articles_record(
     conn: Connection,
@@ -126,7 +202,7 @@ def insert_articles_record(
     
     except errors.UniqueViolation as e:
         if logger:
-            logger.info(f"Error inserting article {article.title}: {e.diag.message_detail}")
+            logger.debug(f"Failed to insert article {article.title}: {e.diag.message_detail}")
 
         conflict_condition = get_conflict_condition(e.diag.message_detail)
                 
@@ -142,7 +218,7 @@ def insert_articles_record(
                     """)
                     existing_record = new_cursor.fetchone()
                     if logger:
-                        logger.info(f"Existing record: {existing_record}")
+                        logger.debug(f"Existing record: {existing_record.get('title')} with ID {existing_record.get('id')}")
                     if existing_record:
                         existing_record['embedded'] = True if existing_record.pop('embedding') is not None else False
                         return ArticleModel(**existing_record), False
@@ -163,20 +239,10 @@ def insert_articles_record(
 
 def insert_events_record(
     cursor: Cursor, 
-    event_title: str,
-    event_summary: Optional[str] = None,
-    event_published_at_range_start: Optional[datetime] = None,
-    event_published_at_range_end: Optional[datetime] = None,
-    event_confidence_score: Optional[float] = None,
-    event_importance_score: Optional[int] = None,
-    event_embedding: list[float] = None,
+    event: EventModel,
     logger: Optional[Logger]=None
     ):
-    returning_fields = ", ".join([
-        "id", "title", "summary", "published_at_range_start",
-        "published_at_range_end", "confidence_score", "importance_score",
-        "embedding", "created_at", "last_updated"
-    ])
+    returning_fields = ", ".join(EVENT_TABLE_FIELDS)
     try:
         cursor.execute(f"""
             INSERT INTO {TABLE_NAMES['events']} 
@@ -186,23 +252,23 @@ def insert_events_record(
             VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING {returning_fields}
         """, (
-            event_title,
-            event_summary,
-            event_published_at_range_start,
-            event_published_at_range_end,
-            event_confidence_score,
-            event_importance_score,
-            event_embedding
+            event.title,
+            event.summary,
+            event.published_at_range_start,
+            event.published_at_range_end,
+            event.confidence_score,
+            event.importance_score,
+            event.embedding
         ))
         
         returned_event = cursor.fetchone()
         if returned_event:
-            returned_event['embedded'] = True if returned_event.pop('embedding') is not None else False
-            return EventModel(**returned_event), True        
-        return None, False
+            event.id = returned_event['id']       
+        
+        return EventModel(**returned_event), True
     except errors.UniqueViolation as e:
         if logger:
-            logger.error(f"Error inserting event {event_title}: {e.diag.message_detail}")
+            logger.debug(f"Failed to insert event {event.title}: {e.diag.message_detail}")
             
         conflict_condition = get_conflict_condition(e.diag.message_detail)
                         
@@ -218,15 +284,15 @@ def insert_events_record(
                     """)
                     existing_record = new_cursor.fetchone()
                     if logger:
-                        logger.info(f"Existing record: {existing_record}")
+                        logger.debug(f"Existing record: {existing_record.get('title')} with ID {existing_record.get('id')}")
                     if existing_record:
-                        existing_record['embedded'] = True if existing_record.pop('embedding') is not None else False
+                        existing_record['embedded'] = True if existing_record.get('embedding') is not None else False
                         return EventModel(**existing_record), False
                     
         return None, False
     except errors.IntegrityError as e:
         if logger:
-            logger.error(f"Integrity error inserting event {event_title}: {e.diag.message_detail}")
+            logger.error(f"Integrity error inserting event {event.title}: {e.diag.message_detail}")
         return None, False
 
 
@@ -245,6 +311,6 @@ def update_event_articles(event: dict, cursor: Cursor, logger: Optional[Logger]=
         ))
     except errors.UniqueViolation as e:
         if logger:
-            logger.error(f"Error updating event {event['event_title']}: {e}")
+            logger.debug(f"Failed to update event {event['event_title']}: {e}")
         else:
             print(f"Error updating event {event['event_title']}: {e}")
