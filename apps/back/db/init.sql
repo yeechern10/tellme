@@ -192,3 +192,24 @@ CREATE TABLE IF NOT EXISTS event_keyword_relationships (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ekr_keyword ON event_keyword_relationships(keyword_id);
+
+
+-- =========================================================
+-- 10. sessions
+-- =========================================================
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id          UUID PRIMARY KEY DEFAULT uuidv7(),
+    user_id     UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash  BYTEA NOT NULL UNIQUE
+                CHECK (octet_length(token_hash) = 32),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at  TIMESTAMPTZ NOT NULL,
+    revoked_at  TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_user_id
+    ON sessions (user_id);
+
+CREATE INDEX IF NOT EXISTS idx_sessions_expires_at
+    ON sessions (expires_at);

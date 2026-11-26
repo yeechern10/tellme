@@ -1,7 +1,7 @@
 import psycopg
 from dotenv import load_dotenv
 
-from ..configuration import PG_CONNECTION_STRING, TABLE_NAMES
+from ..core.config import PG_CONNECTION_STRING, TABLE_NAMES
 
 def connect_to_postgres():
     try:

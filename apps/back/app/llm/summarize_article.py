@@ -12,7 +12,7 @@ from huggingface_hub import login
 
 from ..packages.collect_news import fetch_article_content
 from .system_prompt import article_summarizer, article_summary_schema
-from ..configuration import ARTICLE_SUMMARIZER_MODEL,  ARTICLE_SUMMARIZER_BASE_URL, MAX_ARTICLE_TOKENS
+from ..core.config import ARTICLE_SUMMARIZER_MODEL,  ARTICLE_SUMMARIZER_BASE_URL, MAX_ARTICLE_TOKENS
 
 def model_to_hfmodel(model_name: str) -> str:
     # Mapping of model names to Hugging Face model identifiers

@@ -11,7 +11,7 @@ from ..db.table_schema import ARTICLE_TABLE_FIELDS, KEYWORD_TABLE_FIELDS
 from ..pydantic_model import ArticleModel, EventModel, KeywordModel
 
 from ..db.connect_db import connect_to_postgres
-from ..configuration import TABLE_NAMES
+from ..core.config import TABLE_NAMES
 
 
 def retrieve_leaves_keywords_from_db():
