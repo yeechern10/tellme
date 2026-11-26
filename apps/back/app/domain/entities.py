@@ -17,13 +17,11 @@ def _parse_embedding(v: Any) -> Any:
 Embedding = Annotated[List[float], BeforeValidator(_parse_embedding)]  # Define a type alias for embedding with a validator
 
 
-@dataclass(slot=True)
+@dataclass(slots=True, config=ConfigDict(extra="ignore"))  # Ignore extra fields not defined in the model
 class Keyword:
-    model_config = ConfigDict(extra="ignore")  # Ignore extra fields not defined in the model
-    
     id: Optional[UUID] = Field(None, description="The UUID of the keyword")
     source_id: Optional[str] = Field(None, description="The source ID of the keyword")
-    label: str = Field(..., description="The label of the keyword")
+    label: Annotated[str, Field(description="The label of the keyword")]
     definition: Optional[str] = Field(None, description="The definition of the keyword")
     parent_id: Optional[UUID] = Field(None, description="The parent UUID of the keyword")
     synonyms: Optional[list[str]] = Field(None, description="The synonyms of the keyword")
@@ -39,13 +37,11 @@ class Keyword:
     ref_id: Optional[str] = Field(None, description="The reference ID of the keyword, e.g. 'K_1', 'K_2'")
     path_str: Optional[str] = Field(None, description="The hierarchical path of the keyword in human-readable format, e.g. 'Parent > Child > Subchild'")
     
-@dataclass(slot=True)
-class Article:
-    model_config = ConfigDict(extra="ignore")  # Ignore extra fields not defined in the model
-    
+@dataclass(slots=True, config=ConfigDict(extra="ignore"))  # Ignore extra fields not defined in the model
+class Article:    
     id: Optional[UUID] = Field(None, description="The UUID of the article")
-    title: str = Field(..., description="The title of the article")
-    link: str = Field(..., description="The link to the article")
+    title: Annotated[str, Field(description="The title of the article")]
+    link: Annotated[str, Field(description="The link to the article")]
     snippet: Optional[str] = Field(None, description="A snippet of the article")
     published_at: Optional[datetime] = Field(None, description="The publication timestamp of the article")
     source: Optional[str] = Field(None, description="The source of the article")
@@ -62,14 +58,12 @@ class Article:
     discarded: bool = Field(False, description="Whether the article has been discarded during event detection")
     discarded_reason: Optional[str] = Field(None, description="The reason why the article was discarded during event detection")
     ref_id: Optional[str] = Field(None, description="The reference ID of the article, e.g. 'A_1', 'A_2'")
-    simlilar_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the similar articles associated with the article")
+    similar_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the similar articles associated with the article")
     
-@dataclass(slot=True)
-class Event:
-    model_config = ConfigDict(extra="ignore")  # Ignore extra fields not defined in the model
-    
+@dataclass(slots=True, config=ConfigDict(extra="ignore"))  # Ignore extra fields not defined in the model
+class Event:    
     id: Optional[UUID] = Field(None, description="The UUID of the event")
-    title: str = Field(..., description="The title of the event")
+    title: Annotated[str, Field(description="The title of the event")]
     summary: Optional[str] = Field(None, description="The summary of the event")
     published_at_range_start: Optional[datetime] = Field(None, description="The time of the event first published")
     published_at_range_end: Optional[datetime] = Field(None, description="The time of the event last published")

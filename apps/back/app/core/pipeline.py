@@ -160,7 +160,7 @@ def articles_request_event_pipeline(
         # get similar articles for the group articles
         similar_article_ids = set()
         for article_id in event_group['article_ids']:
-            similar_article_ids.update(ARTICLES_DICT[article_id].simlilar_article_ids)
+            similar_article_ids.update(ARTICLES_DICT[article_id].similar_article_ids)
         
         # get event_ids from similar articles
         similar_event_ids = set()

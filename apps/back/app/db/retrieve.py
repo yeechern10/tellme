@@ -143,9 +143,9 @@ def get_similar_articles(
             if id not in articles_dict:
                 articles_dict[id] = Article(**row)
             else:
-                articles_dict[id].simlilar_article_ids.add(article_id)  # Add the original article ID to the similar article's simlilar_article_ids set
+                articles_dict[id].similar_article_ids.add(article_id)  # Add the original article ID to the similar article's similar_article_ids set
 
-        article.simlilar_article_ids.update(similar_article_ids)
+        article.similar_article_ids.update(similar_article_ids)
                 
         return similar_article_ids  # Return the list of similar article IDs
         
