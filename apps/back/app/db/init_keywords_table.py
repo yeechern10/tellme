@@ -30,7 +30,7 @@ def init_keywords_table():
 
 
 def insert_initial_keywords(logger=None):
-    topics_file_path = Path(__file__).parent / "iptc_media_topics_with_synonyms.json"
+    topics_file_path = Path(__file__).parent.parent / "data" / "iptc_media_topics_with_synonyms.json"
     
     keywords: dict[str,dict] = json.load(open(topics_file_path, "r", encoding="utf-8"))
     keywords = embedding_keywords(keywords)

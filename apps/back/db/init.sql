@@ -10,7 +10,7 @@ CREATE EXTENSION IF NOT EXISTS ltree;
 CREATE TABLE IF NOT EXISTS users (
     id              UUID PRIMARY KEY DEFAULT uuidv7(),
     username        TEXT NOT NULL UNIQUE,
-    password_hash   TEXT NOT NULL,
+    -- password_hash   TEXT NOT NULL,
     country_code    TEXT,
     user_language   TEXT,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
