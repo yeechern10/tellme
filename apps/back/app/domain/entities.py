@@ -1,9 +1,9 @@
 from typing import Literal, Optional, List, Any, Annotated
 from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict, field_validator, BeforeValidator
+from pydantic.dataclasses import dataclass
 from datetime import datetime
 import json
-
 
 # This function is used to parse the embedding field from a string to a list of floats. It is used in the Pydantic models to ensure that the embedding field is always a list of floats, even if it is stored as a string in the database.
 def _parse_embedding(v: Any) -> Any:
@@ -16,7 +16,9 @@ def _parse_embedding(v: Any) -> Any:
 
 Embedding = Annotated[List[float], BeforeValidator(_parse_embedding)]  # Define a type alias for embedding with a validator
 
-class KeywordModel(BaseModel):
+
+@dataclass(slot=True)
+class Keyword:
     model_config = ConfigDict(extra="ignore")  # Ignore extra fields not defined in the model
     
     id: Optional[UUID] = Field(None, description="The UUID of the keyword")
@@ -37,8 +39,8 @@ class KeywordModel(BaseModel):
     ref_id: Optional[str] = Field(None, description="The reference ID of the keyword, e.g. 'K_1', 'K_2'")
     path_str: Optional[str] = Field(None, description="The hierarchical path of the keyword in human-readable format, e.g. 'Parent > Child > Subchild'")
     
-
-class ArticleModel(BaseModel):
+@dataclass(slot=True)
+class Article:
     model_config = ConfigDict(extra="ignore")  # Ignore extra fields not defined in the model
     
     id: Optional[UUID] = Field(None, description="The UUID of the article")
@@ -62,8 +64,8 @@ class ArticleModel(BaseModel):
     ref_id: Optional[str] = Field(None, description="The reference ID of the article, e.g. 'A_1', 'A_2'")
     simlilar_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the similar articles associated with the article")
     
-
-class EventModel(BaseModel):
+@dataclass(slot=True)
+class Event:
     model_config = ConfigDict(extra="ignore")  # Ignore extra fields not defined in the model
     
     id: Optional[UUID] = Field(None, description="The UUID of the event")

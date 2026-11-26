@@ -10,7 +10,7 @@ from typing import Literal, Optional
 from pydantic import validate_call
 from logging import Logger
 
-from ..domain.entities import KeywordModel, ArticleModel, EventModel
+from ..domain import Keyword, Article, Event
 from .connect_db import connect_to_postgres
 from ..db.table_schema import ARTICLE_TABLE_FIELDS, EVENT_TABLE_FIELDS, KEYWORD_TABLE_FIELDS
 from ..core.config import TABLE_NAMES
@@ -39,7 +39,7 @@ def insert_keyword_record(
     keyword_parent_id: Optional[uuid.UUID] = None,
     keyword_embedding: list[float] = None, 
     logger: Optional[Logger] = None
-    ) -> Optional[KeywordModel]:
+    ) -> Optional[Keyword]:
     returning_fields = ", ".join(KEYWORD_TABLE_FIELDS)
     
     try:
@@ -60,7 +60,7 @@ def insert_keyword_record(
         result = cursor.fetchone()
         if result:
             result['embedded'] = True if result.pop('embedding') is not None else False
-            return KeywordModel(**result)
+            return Keyword(**result)
         return None
     except errors.UniqueViolation as e:
         if logger:
@@ -81,7 +81,7 @@ def insert_keyword_record(
                     if logger:
                         logger.debug(f"Existing record: {existing_record.get('label')} with ID {existing_record.get('id')}")
                     
-                    return KeywordModel(**existing_record)
+                    return Keyword(**existing_record)
         return None
     except errors.IntegrityError as e:
         if logger:
@@ -125,7 +125,7 @@ def insert_event_keyword_relationship(
 
 def insert_event_article_relationships(
     cursor: Cursor,
-    event: EventModel,
+    event: Event,
     logger: Optional[Logger] = None
 ) -> bool:
     event_article_pairs = []
@@ -166,7 +166,7 @@ def insert_event_article_relationships(
 
 def insert_articles_record(
     conn: Connection,
-    article: ArticleModel,
+    article: Article,
     logger: Optional[Logger] = None
     ):
     returning_fields = ", ".join(ARTICLE_TABLE_FIELDS)
@@ -196,7 +196,7 @@ def insert_articles_record(
             returned_article = cursor.fetchone()
             if returned_article:
                 returned_article['embedded'] = True if returned_article.pop('embedding') is not None else False
-                return ArticleModel(**returned_article), True
+                return Article(**returned_article), True
             else:
                 raise Exception(f"Failed to insert article {article.link}. No record returned.")    
     
@@ -221,7 +221,7 @@ def insert_articles_record(
                         logger.debug(f"Existing record: {existing_record.get('title')} with ID {existing_record.get('id')}")
                     if existing_record:
                         existing_record['embedded'] = True if existing_record.pop('embedding') is not None else False
-                        return ArticleModel(**existing_record), False
+                        return Article(**existing_record), False
         
         return None, False
     except errors.IntegrityError as e:
@@ -239,7 +239,7 @@ def insert_articles_record(
 
 def insert_events_record(
     cursor: Cursor, 
-    event: EventModel,
+    event: Event,
     logger: Optional[Logger]=None
     ):
     returning_fields = ", ".join(EVENT_TABLE_FIELDS)
@@ -265,7 +265,7 @@ def insert_events_record(
         if returned_event:
             event.id = returned_event['id']       
         
-        return EventModel(**returned_event), True
+        return Event(**returned_event), True
     except errors.UniqueViolation as e:
         if logger:
             logger.debug(f"Failed to insert event {event.title}: {e.diag.message_detail}")
@@ -287,7 +287,7 @@ def insert_events_record(
                         logger.debug(f"Existing record: {existing_record.get('title')} with ID {existing_record.get('id')}")
                     if existing_record:
                         existing_record['embedded'] = True if existing_record.get('embedding') is not None else False
-                        return EventModel(**existing_record), False
+                        return Event(**existing_record), False
                     
         return None, False
     except errors.IntegrityError as e:

@@ -6,7 +6,7 @@ from ..packages import get_logger
 from ..llm.embedding import embedding_keywords
 from ..db.connect_db import connect_to_postgres
 from ..db.insert_record import insert_keyword_record
-from ..domain.entities import KeywordModel
+from ..domain import Keyword
 
 def init_keywords_table():
     with connect_to_postgres() as conn:

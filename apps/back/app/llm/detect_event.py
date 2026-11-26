@@ -14,11 +14,11 @@ from psycopg.rows import dict_row
 from ..db.update_record import update_event_summary
 from ..db.connect_db import connect_to_postgres
 from ..db.insert_record import insert_events_record, insert_event_article_relationships
-from ..domain.entities import ArticleModel, EventModel, KeywordModel, EventSummaryResult
+from ..domain import Article, Event
 from ..packages import get_logger, raw_message_json
 from ..llm.prompts import get_prompt
 from ..llm.embedding import embedding_event
-from ..llm.outputs import EventGroupingResult, FirstPassEventResolutionResult
+from ..llm.outputs import EventGroupingResult, FirstPassEventResolutionResult, EventSummaryResult
 
 
 def json_default(o):
@@ -113,8 +113,8 @@ def event_resolution(
     grouped_article_ids: list[UUID],
     similar_article_event_ids: list[UUID],
     same_batch_event_ids: list[UUID],
-    articles_dict: dict[UUID, ArticleModel],
-    events_dict: dict[UUID, EventModel],
+    articles_dict: dict[UUID, Article],
+    events_dict: dict[UUID, Event],
     model_name: str,
     model_source: str,
     api_key: str,
@@ -227,7 +227,7 @@ def model_to_hfmodel(model_name: str, logger: Logger = None) -> str:
     return hf_model
 
 
-def get_article(article_ids:set[UUID], articles_dict: dict[UUID, ArticleModel], logger=None) :
+def get_article(article_ids:set[UUID], articles_dict: dict[UUID, Article], logger=None) :
     for article_id in article_ids:
         article = articles_dict.get(article_id)
         if not article:
@@ -237,14 +237,14 @@ def get_article(article_ids:set[UUID], articles_dict: dict[UUID, ArticleModel], 
         
         yield article
 
-def get_prefix(article:ArticleModel):
+def get_prefix(article:Article):
     prefix = f"article_title: {article.title}\narticle_source: {article.source}\narticle_published_at: {article.published_at.strftime('%Y-%m-%d %H:%M %z')}\narticle_content:\n"
 
     return prefix
 
 def get_contents(
     article_ids:set[UUID],
-    articles_dict: dict[UUID, ArticleModel],
+    articles_dict: dict[UUID, Article],
     model_name: str,
     model_source: str,
     sys_prompt: str,
@@ -341,8 +341,8 @@ def get_contents(
     return contents
 
 def get_published_at_range(
-    event: EventModel,
-    articles: dict[UUID, ArticleModel],
+    event: Event,
+    articles: dict[UUID, Article],
     current_start=None, current_end=None
     ):
     for id in event.article_ids:
@@ -358,8 +358,8 @@ def get_published_at_range(
 
 def event_summary(
     event_id: UUID|str,
-    event_dict: dict[UUID|str, EventModel],
-    articles_dict: dict[UUID, ArticleModel],
+    event_dict: dict[UUID|str, Event],
+    articles_dict: dict[UUID, Article],
     model_name: str,
     model_source: str,
     api_key: str,

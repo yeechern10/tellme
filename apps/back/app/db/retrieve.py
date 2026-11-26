@@ -8,7 +8,7 @@ from typing import Optional
 from logging import Logger
 
 from ..db.table_schema import ARTICLE_TABLE_FIELDS, KEYWORD_TABLE_FIELDS
-from ..domain.entities import ArticleModel, EventModel, KeywordModel
+from ..domain import Article, Event, Keyword
 
 from ..db.connect_db import connect_to_postgres
 from ..core.config import TABLE_NAMES
@@ -22,7 +22,7 @@ def retrieve_leaves_keywords_from_db():
         columns = [d[0] for d in cursor.description]
         keyword_dict = {}
         for row in keywords:
-            keyword_dict[row['id']] = KeywordModel(**row)
+            keyword_dict[row['id']] = Keyword(**row)
     return keyword_dict
 
 def get_event_with_event_id(cursor: psycopg.Cursor, event_id: str):
@@ -33,7 +33,7 @@ def get_event_with_event_id(cursor: psycopg.Cursor, event_id: str):
                        )
         event = cursor.fetchone()
         event['embedded'] = True if event['embedding'] is not None else False
-        event = EventModel(**event)
+        event = Event(**event)
         
         cursor.execute(f"""SELECT article_id
                         FROM {TABLE_NAMES['event_article_relationships']}
@@ -49,8 +49,8 @@ def get_event_with_event_id(cursor: psycopg.Cursor, event_id: str):
 
 def get_article_event(
     cursor: psycopg.Cursor, 
-    article: ArticleModel,
-    events_dict: dict[UUID, EventModel],
+    article: Article,
+    events_dict: dict[UUID, Event],
     logger: Optional[Logger] = None
     ) -> Optional[set[UUID]]:
     try:
@@ -87,7 +87,7 @@ def get_article_event(
 def get_similar_articles(
     cursor: psycopg.Cursor,
     article_id: UUID, 
-    articles_dict: dict[UUID, ArticleModel], 
+    articles_dict: dict[UUID, Article], 
     threshold: float = 0.2, 
     top_k: int = 5,
     logger: Optional[Logger] = None
@@ -141,7 +141,7 @@ def get_similar_articles(
             id = row['id']
             similar_article_ids.append(id)
             if id not in articles_dict:
-                articles_dict[id] = ArticleModel(**row)
+                articles_dict[id] = Article(**row)
             else:
                 articles_dict[id].simlilar_article_ids.add(article_id)  # Add the original article ID to the similar article's simlilar_article_ids set
 
@@ -165,7 +165,7 @@ def get_keyword_with_keyword_id(cursor: psycopg.Cursor, keyword_id: str):
         
         keyword['path_str'] = path_id_to_label(cursor, keyword['path']) if keyword['path'] else None
     
-        keyword = KeywordModel(**keyword)
+        keyword = Keyword(**keyword)
         
         return keyword
     except Exception as e:
@@ -192,8 +192,8 @@ def path_id_to_label(cursor: psycopg.Cursor, path: str) -> Optional[str]:
 
 def get_event_keywords(
     cursor: psycopg.Cursor,
-    event: EventModel,
-    keywords_dict: dict[UUID, KeywordModel],
+    event: Event,
+    keywords_dict: dict[UUID, Keyword],
     logger: Optional[Logger] = None
 ) -> Optional[list[UUID]]:
     
@@ -237,8 +237,8 @@ def get_event_keywords(
 
 def get_event_similar_keywords(
     cursor: psycopg.Cursor,
-    event: EventModel, 
-    keywords_dict: dict[UUID, KeywordModel],
+    event: Event, 
+    keywords_dict: dict[UUID, Keyword],
     threshold: Optional[float] = None, 
     top_k: int = 5,
     logger: Optional[Logger] = None
@@ -294,7 +294,7 @@ def get_event_similar_keywords(
 
             
             if id not in keywords_dict:
-                keywords_dict[id] = KeywordModel(**row)
+                keywords_dict[id] = Keyword(**row)
                 
             similar_keyword_ids.append(id)
 

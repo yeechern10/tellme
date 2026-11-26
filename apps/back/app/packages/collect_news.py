@@ -13,7 +13,7 @@ import time
 from ..db.update_record import update_articles_record
 from ..llm.embedding import embedding_articles
 from ..packages import get_logger
-from ..domain.entities import ArticleModel
+from ..domain import Article
 from ..db.connect_db import connect_to_postgres
 from ..db.insert_record import insert_articles_record
 
@@ -59,7 +59,7 @@ def convert_relative_date(delta_t: str, logger: Optional[Logger] =None):
     return published_at
 
 
-def brave_search_result_interpretation(response: dict, logger: Optional[Logger] = None) -> list[ArticleModel]:
+def brave_search_result_interpretation(response: dict, logger: Optional[Logger] = None) -> list[Article]:
     articles = []
     results = response.get("results", [])
     article_type = response.get("type", None)
@@ -79,7 +79,7 @@ def brave_search_result_interpretation(response: dict, logger: Optional[Logger] 
         meta_url = result.get("meta_url", {})
         source = meta_url.get("hostname", None)
 
-        articles.append(ArticleModel(
+        articles.append(Article(
             title=result.get("title"),
             link=result.get("url"),
             snippet= snippet,
@@ -170,7 +170,7 @@ def brave_search_articles(
     
     return article_list
 
-def remove_duplicates_missing(article_list: list[ArticleModel]):
+def remove_duplicates_missing(article_list: list[Article]):
     seen_links = set()
     new_article_list = []
     

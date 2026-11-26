@@ -1,7 +1,7 @@
 from langchain_openai import OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 
-from ..domain.entities import ArticleModel, EventModel, KeywordModel
+from ..domain import Article, Event, Keyword
 from uuid import UUID
 
 from ..core.config import EMBEDDING_MODEL, EMBEDDING_BATCH_SIZE
@@ -43,14 +43,14 @@ def embedding_keywords(keyword_dicts) -> dict[UUID, dict]:
     
     return keyword_dicts
 
-def article_title_content_to_text(article: ArticleModel):
+def article_title_content_to_text(article: Article):
     if article.content:
         text = f"Title: {article.title}\nContent: {article.content}\n"
     else:
         text = f"Title: {article.title}\nSnippet: {article.snippet}\n"
     return text
 
-def embedding_articles(article_dicts: dict[UUID, ArticleModel], to_embedding_articles: list[UUID]):
+def embedding_articles(article_dicts: dict[UUID, Article], to_embedding_articles: list[UUID]):
     embedding = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
         encode_kwargs={
@@ -68,7 +68,7 @@ def embedding_articles(article_dicts: dict[UUID, ArticleModel], to_embedding_art
     
     return article_dicts
 
-def embedding_event(event: EventModel):
+def embedding_event(event: Event):
     embedding = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL,
         encode_kwargs={

@@ -5,7 +5,7 @@ from tqdm import tqdm
 from uuid import UUID
 from psycopg.rows import dict_row
 
-from ..domain.entities import ArticleModel, EventModel, KeywordModel
+from ..domain import Article, Event, Keyword
 from ..llm.detect_event import group_articles_by_event, event_resolution, event_summary
 from ..db.retrieve import get_article_event, get_similar_articles
 from ..db.connect_db import connect_to_postgres
@@ -34,13 +34,13 @@ def articles_request_event_pipeline(
     event_keyword_matching_model_api_key: str,
     log_level: int = INFO,
     logger: Optional[Logger]=None,
-    ) -> list[EventModel]:
+    ) -> list[Event]:
     if logger is None:
         logger = get_logger(__name__, log_level=log_level)
     
-    ARTICLES_DICT : dict[UUID, ArticleModel] = {}
-    EVENTS_DICT : dict[UUID, EventModel] = {}
-    KEYWORDS_DICT : dict[UUID, KeywordModel] = {}
+    ARTICLES_DICT : dict[UUID, Article] = {}
+    EVENTS_DICT : dict[UUID, Event] = {}
+    KEYWORDS_DICT : dict[UUID, Keyword] = {}
     print(f'pipeline started')
     
     
@@ -198,7 +198,7 @@ def articles_request_event_pipeline(
                 new_event_id = f"new_event_{len(new_event_ids) + 1}"
                 new_event_ids.add(new_event_id)
                 
-                EVENTS_DICT[new_event_id] = EventModel(**{
+                EVENTS_DICT[new_event_id] = Event(**{
                     "title": new_event["event_title"],
                     "article_ids": set([article_ref_id_map[ref] for ref in new_event["article_refs"]]),
                     "new_article_ids": set( [article_ref_id_map[ref] for ref in new_event["article_refs"]] ),
@@ -252,7 +252,7 @@ def articles_request_event_pipeline(
     logger.info("Keyword matching to events completed.")
     
     # Return event
-    event_output : list[EventModel] = []
+    event_output : list[Event] = []
     for event_id in existed_event_ids | updated_event_ids| new_event_ids:
         event_output.append(EVENTS_DICT.get(event_id))
     

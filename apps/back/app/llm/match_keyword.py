@@ -9,7 +9,7 @@ from ..db.connect_db import connect_to_postgres
 from ..db.update_record import update_event_keywords
 from ..db.insert_record import insert_event_keyword_relationship
 from ..packages import get_logger
-from ..domain.entities import EventModel, KeywordModel
+from ..domain import Event, Keyword
 from ..db.retrieve import get_event_keywords, get_event_similar_keywords
 from ..llm.prompts import get_prompt
 from ..llm.outputs import EventKeywordMatchingResult
@@ -18,8 +18,8 @@ from ..packages.raw_message_json import raw_message_json
 
 def match_keywords_to_event (
     event_id: UUID,
-    event_dict: dict[UUID, EventModel],
-    keywords_dict: dict[UUID, KeywordModel],
+    event_dict: dict[UUID, Event],
+    keywords_dict: dict[UUID, Keyword],
     model_name: str,
     model_source: str,
     api_key: str,

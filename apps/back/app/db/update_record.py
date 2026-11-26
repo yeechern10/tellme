@@ -9,12 +9,12 @@ from typing import Literal, Optional
 from pydantic import validate_call
 from logging import Logger
 
-from ..domain.entities import KeywordModel, ArticleModel, EventModel
+from ..domain import Keyword, Article, Event
 from .connect_db import connect_to_postgres
 from ..core.config import TABLE_NAMES
 from ..db.table_schema import ARTICLE_TABLE_FIELDS, EVENT_TABLE_FIELDS
 
-def update_articles_record(conn: Connection, article: ArticleModel, logger: Optional[Logger]=None):
+def update_articles_record(conn: Connection, article: Article, logger: Optional[Logger]=None):
     returning_fields = ", ".join(ARTICLE_TABLE_FIELDS)
     
     try:
@@ -68,7 +68,7 @@ def update_articles_record(conn: Connection, article: ArticleModel, logger: Opti
     
 def update_event_summary(
     cursor: Cursor, 
-    event: EventModel, 
+    event: Event, 
     logger: Optional[Logger]=None
 ):
     returning_fields = ", ".join(EVENT_TABLE_FIELDS)

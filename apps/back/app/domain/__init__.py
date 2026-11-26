@@ -1,8 +1,8 @@
-from .entities import ArticleModel, EventModel, KeywordModel
+from .entities import Article, Event, Keyword
 
 
 __all__ = [
-    "ArticleModel",
-    "EventModel",
-    "KeywordModel",
+    "Article",
+    "Event",
+    "Keyword",
 ]
