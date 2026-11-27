@@ -152,7 +152,7 @@ def match_keywords_to_event (
             
             keyword_id = keyword_ref_id_map[ref_id]
 
-            event.keyword_id_relevance_score_dict[keyword_id] = result.get("relevance_score", 0.0)
+            event.keywords[keyword_id] = (keywords_dict[keyword_id], result.get("relevance_score", 0.0))
             
             if  keyword_id in related_keyword_ids:
                 # Update the relevance score for keywords that are already related to the database

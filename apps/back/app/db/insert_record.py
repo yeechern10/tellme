@@ -12,8 +12,8 @@ from logging import Logger
 
 from ..domain import Keyword, Article, Event
 from .connect_db import connect_to_postgres
-from ..db.table_schema import ARTICLE_TABLE_FIELDS, EVENT_TABLE_FIELDS, KEYWORD_TABLE_FIELDS
-from ..core.config import TABLE_NAMES
+from .schema import TABLE_FIELDS
+from ..db.schema import TABLE_NAMES
 
 def get_conflict_condition(error_message: str):
     match = re.search(r'Key \((.*?)\)=\((.*?)\)', error_message)
@@ -40,7 +40,7 @@ def insert_keyword_record(
     keyword_embedding: list[float] = None, 
     logger: Optional[Logger] = None
     ) -> Optional[Keyword]:
-    returning_fields = ", ".join(KEYWORD_TABLE_FIELDS)
+    returning_fields = ", ".join(TABLE_FIELDS['keywords'])
     
     try:
         cursor.execute(f"""
@@ -169,7 +169,7 @@ def insert_articles_record(
     article: Article,
     logger: Optional[Logger] = None
     ):
-    returning_fields = ", ".join(ARTICLE_TABLE_FIELDS)
+    returning_fields = ", ".join(TABLE_FIELDS['articles'])
 
     try:
         with conn.transaction():
@@ -242,7 +242,7 @@ def insert_events_record(
     event: Event,
     logger: Optional[Logger]=None
     ):
-    returning_fields = ", ".join(EVENT_TABLE_FIELDS)
+    returning_fields = ", ".join(TABLE_FIELDS['events'])
     try:
         cursor.execute(f"""
             INSERT INTO {TABLE_NAMES['events']} 

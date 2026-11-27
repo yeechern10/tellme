@@ -13,7 +13,7 @@ from ..packages import collect_article_pipeline, get_logger
 from ..llm.match_keyword import match_keywords_to_event
 
 
-def articles_request_event_pipeline(
+def article_event_pipeline(
     search_api:str,
     search_api_key: str,
     query_list: list[str], 
@@ -100,7 +100,9 @@ def articles_request_event_pipeline(
         ref = f"E_{idx}"
         event_ref_id_map[ref] = event_id
         EVENTS_DICT[event_id].ref_id = ref
-                 
+    
+    # TODO: implement method to avoid exceed the context length limit of LLM, e.g. split the articles into multiple batches and process them separately
+    
     logger.info("Starting articles grouping...")
     # group retrived articles
     group_result = group_articles_by_event(
@@ -168,6 +170,8 @@ def articles_request_event_pipeline(
             similar_article = ARTICLES_DICT.get(similar_article_id)
             if similar_article:
                 similar_event_ids.update(similar_article.event_ids)
+        
+        # TODO: implement method to avoid exceed the context length limit of LLM, e.g. split the articles into multiple batches and process them separately
         
         # event resolution
         resolution_result = event_resolution(

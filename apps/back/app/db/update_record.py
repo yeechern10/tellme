@@ -6,16 +6,13 @@ from psycopg.rows import dict_row
 import re
 import uuid
 from typing import Literal, Optional
-from pydantic import validate_call
 from logging import Logger
 
 from ..domain import Keyword, Article, Event
-from .connect_db import connect_to_postgres
-from ..core.config import TABLE_NAMES
-from ..db.table_schema import ARTICLE_TABLE_FIELDS, EVENT_TABLE_FIELDS
+from .schema import TABLE_NAMES, TABLE_FIELDS
 
 def update_articles_record(conn: Connection, article: Article, logger: Optional[Logger]=None):
-    returning_fields = ", ".join(ARTICLE_TABLE_FIELDS)
+    returning_fields = ", ".join(TABLE_FIELDS['articles'])
     
     try:
         with conn.transaction():
@@ -71,7 +68,7 @@ def update_event_summary(
     event: Event, 
     logger: Optional[Logger]=None
 ):
-    returning_fields = ", ".join(EVENT_TABLE_FIELDS)
+    returning_fields = ", ".join(TABLE_FIELDS['events'])
     
     try:
         cursor.execute(

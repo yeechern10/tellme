@@ -4,7 +4,7 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from ..domain import Article, Event, Keyword
 from uuid import UUID
 
-from ..core.config import EMBEDDING_MODEL, EMBEDDING_BATCH_SIZE
+from ..core.config import settings
 
 def keyword_dicts_to_text(keyword_dicts):
     keywords_texts = []
@@ -30,10 +30,10 @@ def embedding_keywords(keyword_dicts) -> dict[UUID, dict]:
     keywords_texts = keyword_dicts_to_text(keyword_dicts)
     
     embedding = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
+        model_name=settings.EMBEDDING_MODEL,
         encode_kwargs={
             "normalize_embeddings": True,
-            "batch_size": EMBEDDING_BATCH_SIZE,
+            "batch_size": settings.EMBEDDING_BATCH_SIZE,
         }
     )
 
@@ -52,10 +52,10 @@ def article_title_content_to_text(article: Article):
 
 def embedding_articles(article_dicts: dict[UUID, Article], to_embedding_articles: list[UUID]):
     embedding = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
+        model_name=settings.EMBEDDING_MODEL,
         encode_kwargs={
             "normalize_embeddings": True,
-            "batch_size": EMBEDDING_BATCH_SIZE,
+            "batch_size": settings.EMBEDDING_BATCH_SIZE,
         }
     )
 
@@ -70,10 +70,10 @@ def embedding_articles(article_dicts: dict[UUID, Article], to_embedding_articles
 
 def embedding_event(event: Event):
     embedding = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL,
+        model_name=settings.EMBEDDING_MODEL,
         encode_kwargs={
             "normalize_embeddings": True,
-            "batch_size": EMBEDDING_BATCH_SIZE,
+            "batch_size": settings.EMBEDDING_BATCH_SIZE,
         }
     )
 

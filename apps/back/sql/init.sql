@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS keywords (
     parent_id       UUID REFERENCES keywords(id) ON DELETE SET NULL,
     synonyms        TEXT[],  -- array of synonyms
     keyword_type    TEXT,
-    embedding       vector(	1024),  -- for BAAI/bge-m3
+    embedding       vector(1024),  -- for BAAI/bge-m3
     path            ltree NOT NULL,      -- for hierarchical relationships
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_updated    TIMESTAMPTZ NOT NULL DEFAULT now()

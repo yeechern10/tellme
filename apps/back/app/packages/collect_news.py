@@ -12,7 +12,7 @@ import time
 
 from ..db.update_record import update_articles_record
 from ..llm.embedding import embedding_articles
-from ..packages import get_logger
+from .logger import get_logger
 from ..domain import Article
 from ..db.connect_db import connect_to_postgres
 from ..db.insert_record import insert_articles_record

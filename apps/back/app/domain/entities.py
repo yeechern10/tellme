@@ -19,36 +19,42 @@ Embedding = Annotated[List[float], BeforeValidator(_parse_embedding)]  # Define 
 
 @dataclass(slots=True, config=ConfigDict(extra="ignore"))  # Ignore extra fields not defined in the model
 class Keyword:
+    # required fields
+    label: Annotated[str, Field(description="The label of the keyword")]
+
+    # optional fields
     id: Optional[UUID] = Field(None, description="The UUID of the keyword")
     source_id: Optional[str] = Field(None, description="The source ID of the keyword")
-    label: Annotated[str, Field(description="The label of the keyword")]
     definition: Optional[str] = Field(None, description="The definition of the keyword")
     parent_id: Optional[UUID] = Field(None, description="The parent UUID of the keyword")
-    synonyms: Optional[list[str]] = Field(None, description="The synonyms of the keyword")
-    type: Literal["iptc_media_topic", "location", "custom"] | None = Field(None, description="The type of the keyword")
+    synonyms: list[str] = Field(default_factory=list, description="The synonyms of the keyword")
+    type: Optional[Literal["iptc_media_topic", "location", "custom"]] = Field(None, description="The type of the keyword")
     embedding: Optional[Embedding] = Field(None, description="The embedding of the keyword")
     path: Optional[str] = Field(None, description="The hierarchical path of the keyword in ltree format")
     created_at: Optional[datetime] = Field(None, description="The creation timestamp of the keyword")
     last_updated: Optional[datetime] = Field(None, description="The last updated timestamp of the keyword")
     embedded: bool = Field(False, description="Whether the keyword has been embedded")
     parent_source_id: Optional[str] = Field(None, description="The parent source ID of the keyword")
-    children: list[UUID] | None = Field(None, description="The children UUIDs of the keyword")
-    children_source_ids: list[str] | None = Field(None, description="The children source IDs of the keyword")
+    children: set[UUID] = Field(default_factory=set, description="The children UUIDs of the keyword")
+    children_source_ids: Optional[list[str]] = Field(None, description="The children source IDs of the keyword")
     ref_id: Optional[str] = Field(None, description="The reference ID of the keyword, e.g. 'K_1', 'K_2'")
     path_str: Optional[str] = Field(None, description="The hierarchical path of the keyword in human-readable format, e.g. 'Parent > Child > Subchild'")
     
 @dataclass(slots=True, config=ConfigDict(extra="ignore"))  # Ignore extra fields not defined in the model
-class Article:    
-    id: Optional[UUID] = Field(None, description="The UUID of the article")
+class Article:
+    # required fields
     title: Annotated[str, Field(description="The title of the article")]
     link: Annotated[str, Field(description="The link to the article")]
+    
+    # optional fields
+    id: Optional[UUID] = Field(None, description="The UUID of the article")
     snippet: Optional[str] = Field(None, description="A snippet of the article")
     published_at: Optional[datetime] = Field(None, description="The publication timestamp of the article")
     source: Optional[str] = Field(None, description="The source of the article")
     article_language: Optional[str] = Field(None, description="The language of the article")
     article_type: Optional[str] = Field(None, description="The type of the article")
     content: Optional[str] = Field(None, description="The full content of the article")
-    content_status: Literal["pending", "completed", "failed"] | None = Field(None, description="The status of the requesting article content")
+    content_status: Optional[Literal["pending", "completed", "failed"]] = Field("pending", description="The status of the requesting article content")
     content_error: Optional[str] = Field(None, description="The error message if the content request failed")
     embedding: Optional[Embedding] = Field(None, description="The embedding of the article")
     created_at: Optional[datetime] = Field(None, description="The creation timestamp of the article")
@@ -59,11 +65,15 @@ class Article:
     discarded_reason: Optional[str] = Field(None, description="The reason why the article was discarded during event detection")
     ref_id: Optional[str] = Field(None, description="The reference ID of the article, e.g. 'A_1', 'A_2'")
     similar_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the similar articles associated with the article")
-    
+
+
 @dataclass(slots=True, config=ConfigDict(extra="ignore"))  # Ignore extra fields not defined in the model
-class Event:    
-    id: Optional[UUID] = Field(None, description="The UUID of the event")
+class Event:
+    # required fields
     title: Annotated[str, Field(description="The title of the event")]
+
+    # optional fields
+    id: Optional[UUID] = Field(None, description="The UUID of the event")
     summary: Optional[str] = Field(None, description="The summary of the event")
     published_at_range_start: Optional[datetime] = Field(None, description="The time of the event first published")
     published_at_range_end: Optional[datetime] = Field(None, description="The time of the event last published")
@@ -76,5 +86,5 @@ class Event:
     article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the articles associated with the event")
     ref_id: Optional[str] = Field(None, description="The reference ID of the event, e.g. 'E_1', 'E_2'")
     new_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the new articles assigned to the event")
-    keyword_id_relevance_score_dict: dict[UUID, float] = Field(default_factory=dict, description="The UUIDs of the keywords associated with the event and their relevance scores")
+    keywords: dict[UUID, tuple[Keyword, float]] = Field(default_factory=dict, description="The keywords associated with the event and their relevance scores")
     

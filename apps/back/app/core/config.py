@@ -1,84 +1,120 @@
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+from pydantic import SecretStr
+from pydantic_settings import BaseSettings, SettingsConfigDict
+import logging
 
-env_path = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(env_path)
-
-# db
-DB_DIR = Path(__file__).parent.parent / "db"
-DB_DIR.mkdir(parents=True, exist_ok=True)
-
-# postgres
-username = os.getenv("POSTGRES_USER", "postgres")
-password = os.getenv("POSTGRES_PASSWORD", "postgres")
-host = "localhost"
-port = "5432"
-db_name = "tellme_db"
-PG_CONNECTION_STRING = f"postgresql://{username}:{password}@{host}:{port}/{db_name}"
-
-# table names
-TABLE_NAMES = {
-    "users": "users",
-    "articles": "articles",
-    "events": "events",
-    "keywords": "keywords",
-    "user_keywords": "user_keywords",
-    "user_article_interactions": "user_article_interactions",
-    "user_event_interactions": "user_event_interactions",
-    "event_article_relationships": "event_article_relationships",
-    "event_keyword_relationships": "event_keyword_relationships"
-}
+from .paths import ENV_PATH 
 
 
-# keywords
-KEYWORDS_FILE_PATH = Path(__file__).parent.parent / "db" / "keywords.json"
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file= ENV_PATH,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+    # global settings
+    PROJECT_NAME: str = "tellme_backend"
+    VERSION: str = "0.1.0"
+    DESCRIPTION: str = "Backend API for TellMe application"
+    LOG_LEVEL: int = logging.INFO 
+    
+    # ---------- embedding ----------
+    EMBEDDING_MODEL: str = "BAAI/bge-m3"
+    EMBEDDING_BATCH_SIZE: int = 16
 
-# news
-SEARCH_API = 'brave'    # Options: 'brave'
+    # ---------- token limits ----------
+    MAX_ARTICLE_TOKENS: int = 8000
+    UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE: int = 2000
+    EVENT_SUMMARY_MAX_OUTPUT_TOKENS:int = 1000
 
-# llm
-CHAT_AGENT_BASE_URL = "http://localhost:11434/v1/"
-CHAT_AGENT_MODEL = "maternion/minicpm5:2b"
+    # ---------- postgres ----------
+    POSTGRES_USER: str = "postgres"
+    POSTGRES_PASSWORD: SecretStr = SecretStr("postgres")
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str = "tellme_db"
 
-ARTICLE_EVENT_GROUPING_AGENT_SOURCE = "ollama"
-ARTICLE_EVENT_GROUPING_AGENT_MODEL = "gemma4:e4b"
+    # ---------- search ----------
+    SEARCH_API: str = "brave"             # 'brave' | 'serper'
+    BRAVE_SEARCH_API_KEY: SecretStr | None = None
+    SERPER_API_KEY: SecretStr | None = None
+
+    # ---------- llm ----------
+    CHAT_AGENT_BASE_URL: str = "http://localhost:11434/v1/"
+    CHAT_AGENT_MODEL: str = "maternion/minicpm5:2b"
+    CHAT_AGENT_API_KEY: SecretStr = SecretStr("null")
+
+    ARTICLE_EVENT_GROUPING_AGENT_SOURCE: str = "ollama"
+    ARTICLE_EVENT_GROUPING_AGENT_MODEL: str = "gemma4:e4b"
+    ARTICLE_EVENT_GROUPING_AGENT_API_KEY: SecretStr | None = None
+
+    EVENT_RESOLUTION_AGENT_SOURCE: str = "ollama"
+    EVENT_RESOLUTION_AGENT_MODEL: str = "gemma4:e4b"
+    EVENT_RESOLUTION_AGENT_API_KEY: SecretStr | None = None
+
+    EVENT_SUMMARY_AGENT_SOURCE: str = "ollama"
+    EVENT_SUMMARY_AGENT_MODEL: str = "gemma4:e4b"
+    EVENT_SUMMARY_AGENT_API_KEY: SecretStr | None = None
+    EVENT_SUMMARY_AGENT_MAX_OUTPUT_TOKENS: int = 1000
+
+    EVENT_KEYWORD_MATCHING_MODEL_SOURCE: str = "ollama"
+    EVENT_KEYWORD_MATCHING_MODEL: str = "gemma4:e4b"
+    EVENT_KEYWORD_MATCHING_MODEL_API_KEY: SecretStr | None = None
+
+    # ---------- misc ----------
+    HF_TOKEN: SecretStr | None = None
+
+    @property
+    def pg_connection_string(self) -> str:
+        pwd = self.POSTGRES_PASSWORD.get_secret_value()
+        return (
+            f"postgresql://{self.POSTGRES_USER}:{pwd}"
+            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
+        )
 
 
-EVENT_RESOLUTION_AGENT_SOURCE = "ollama"
-EVENT_RESOLUTION_AGENT_MODEL = "gemma4:e4b"
+    # if no specific agent api key, fallback to chat agent api key
+    @property
+    def search_api_key(self) -> SecretStr :
+        return {
+            "brave": self.BRAVE_SEARCH_API_KEY,
+            "serper": self.SERPER_API_KEY,
+        }.get(self.SEARCH_API)
 
-EVENT_SUMMARY_AGENT_SOURCE = "ollama"
-EVENT_SUMMARY_AGENT_MODEL = "gemma4:e4b"
-EVENT_SUMMARY_AGENT_MAX_OUTPUT_TOKENS = 1000
+    def _fallback(self, specific: SecretStr | None) -> SecretStr:
+        return specific or self.CHAT_AGENT_API_KEY
+    
+    @property
+    def chat_agent_api_key(self) -> SecretStr:
+        return self.CHAT_AGENT_API_KEY
 
-EVENT_KEYWORD_MATCHING_MODEL_SOURCE = "ollama"
-EVENT_KEYWORD_MATCHING_MODEL = "gemma4:e4b"
+    @property
+    def article_event_grouping_api_key(self) -> SecretStr:
+        return self._fallback(self.ARTICLE_EVENT_GROUPING_AGENT_API_KEY)
+
+    @property
+    def event_resolution_api_key(self) -> SecretStr:
+        return self._fallback(self.EVENT_RESOLUTION_AGENT_API_KEY)
+
+    @property
+    def event_summary_api_key(self) -> SecretStr:
+        return self._fallback(self.EVENT_SUMMARY_AGENT_API_KEY)
+
+    @property
+    def event_keyword_matching_api_key(self) -> SecretStr:
+        return self._fallback(self.EVENT_KEYWORD_MATCHING_MODEL_API_KEY)
+
+    def check_required_keys(self) -> bool:
+        required_keys = [
+            self.search_api_key,
+            self.article_event_grouping_api_key,
+            self.event_resolution_api_key,
+            self.event_summary_api_key,
+            self.event_keyword_matching_api_key,
+        ]
+        return all(key is not None for key in required_keys)
+
+settings = Settings()
 
 
-# api keys
-if SEARCH_API == 'serper':
-    SEARCH_API_KEY = os.getenv("SERPER_API_KEY", None)
-elif SEARCH_API == 'brave':
-    SEARCH_API_KEY = os.getenv("BRAVE_SEARCH_API_KEY", None)
-
-
-CHAT_AGENT_API_KEY = os.getenv("CHAT_AGENT_API_KEY", "null")
-ARTICLE_EVENT_GROUPING_AGENT_API_KEY = os.getenv("ARTICLE_EVENT_GROUPING_AGENT_API_KEY", CHAT_AGENT_API_KEY)
-EVENT_RESOLUTION_AGENT_API_KEY = os.getenv("EVENT_RESOLUTION_AGENT_API_KEY", CHAT_AGENT_API_KEY)
-EVENT_SUMMARY_AGENT_API_KEY = os.getenv("EVENT_SUMMARY_AGENT_API_KEY", CHAT_AGENT_API_KEY)
-EVENT_KEYWORD_MATCHING_MODEL_API_KEY = os.getenv("EVENT_KEYWORD_MATCHING_MODEL_API_KEY", CHAT_AGENT_API_KEY)
-
-
-
-HF_TOKEN = os.getenv("HF_TOKEN", None)
-
-# context lengths
-MAX_ARTICLE_TOKENS = 8000  # Maximum length of the article content to be summarized
-
-# uncertain article reanalysis
-UNCERTAIN_ARTICLE_REANALYSIS_CONTENT_TRUNCATE = 2000  # Maximum length of the article content to be reanalyzed
-
-# embedding
-EMBEDDING_MODEL = "BAAI/bge-m3"
-EMBEDDING_BATCH_SIZE = 16

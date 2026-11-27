@@ -167,6 +167,7 @@ def event_resolution(
     try_times = 0
     while try_times < max_retries:
         try:
+            logger.debug(f"Sending event resolution request to LLM with content: {json.dumps(content, default=json_default)}")
             response = llm_client.invoke(messages)
             
             raw_ai_message = raw_message_json(response["raw"])

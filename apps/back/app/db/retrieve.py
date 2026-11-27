@@ -7,11 +7,11 @@ from uuid import UUID
 from typing import Optional
 from logging import Logger
 
-from ..db.table_schema import ARTICLE_TABLE_FIELDS, KEYWORD_TABLE_FIELDS
+from .schema import TABLE_FIELDS
 from ..domain import Article, Event, Keyword
 
 from ..db.connect_db import connect_to_postgres
-from ..core.config import TABLE_NAMES
+from ..db.schema import TABLE_NAMES
 
 
 def retrieve_leaves_keywords_from_db():
@@ -92,8 +92,8 @@ def get_similar_articles(
     top_k: int = 5,
     logger: Optional[Logger] = None
 ) -> Optional[list[UUID]]:
-    returning_fields_with_ref = ", ".join(["a."+field for field in ARTICLE_TABLE_FIELDS])
-    returning_fields = ", ".join(ARTICLE_TABLE_FIELDS)
+    returning_fields_with_ref = ", ".join(["a."+field for field in TABLE_FIELDS['articles']])
+    returning_fields = ", ".join(TABLE_FIELDS['articles'])
     
     article = articles_dict.get(article_id)
     if not article:
@@ -223,8 +223,8 @@ def get_event_keywords(
                 keyword = get_keyword_with_keyword_id(cursor, id)
                 if keyword:
                     keywords_dict[id] = keyword
-                    
-                event.keyword_id_relevance_score_dict[id] = row['relevance_score']  # Store the relevance score for the keyword in the event's dictionary
+            
+            event.keywords[id] = (keywords_dict[id], row['relevance_score'])  # Store the keyword and its relevance score in the event's keywords dictionary
         
         
         return keyword_ids  # Return the list of keyword IDs
@@ -244,7 +244,7 @@ def get_event_similar_keywords(
     logger: Optional[Logger] = None
 ) -> Optional[list[UUID]]:
     
-    returning_fields_with_ref = ", ".join(["k."+field for field in KEYWORD_TABLE_FIELDS])
+    returning_fields_with_ref = ", ".join(["k."+field for field in TABLE_FIELDS['keywords']])
     
     event_embedding = event.embedding
     if not event_embedding:
