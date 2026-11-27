@@ -55,7 +55,7 @@ async def build_events(
             ))
         
         response.append({
-            "event_id": str(event.event_id),
+            "event_id": str(event.id),
             "title": event.title,
             "summary": event.summary,
             "published_at_range": event.published_at_range,
@@ -68,7 +68,7 @@ async def build_events(
                     snippet=article.snippet,
                     published_at=article.published_at,
                     source=article.source
-                ) for article in event.articles
+                ) for article in event.articles.values()
             ]
         })
         

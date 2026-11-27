@@ -84,7 +84,13 @@ class Event:
     last_updated: Optional[datetime] = Field(None, description="The last updated timestamp of the event")
     embedded: bool = Field(False, description="Whether the event has been embedded")
     article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the articles associated with the event")
+    articles: dict[UUID, Article] = Field(default_factory=dict, description="The articles associated with the event")
     ref_id: Optional[str] = Field(None, description="The reference ID of the event, e.g. 'E_1', 'E_2'")
     new_article_ids: set[UUID] = Field(default_factory=set, description="The UUIDs of the new articles assigned to the event")
     keywords: dict[UUID, tuple[Keyword, float]] = Field(default_factory=dict, description="The keywords associated with the event and their relevance scores")
     
+    @property
+    def published_at_range(self) -> Optional[tuple[datetime, datetime]]:
+        if self.published_at_range_start and self.published_at_range_end:
+            return (self.published_at_range_start, self.published_at_range_end)
+        return None

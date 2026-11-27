@@ -68,6 +68,7 @@ def get_article_event(
         
         for event_id in event_ids:
             event = get_event_with_event_id(cursor, event_id)
+            event.articles[article.id] = article  # Add the article to the event's articles dictionary
             if not event:
                 if logger:
                     logger.error(f"Event with ID {event_id} not found in the database.")
@@ -75,8 +76,9 @@ def get_article_event(
 
             if event.id not in events_dict:
                 events_dict[event.id] = event
-                
-            events_dict[event.id].article_ids.update(event.article_ids) # Add the article IDs to the existing event's article_ids set
+            else:
+                events_dict[event.id].articles.update(event.articles)  # Add the article to the existing event's articles dictionary
+                events_dict[event.id].article_ids.update(event.article_ids) # Add the article IDs to the existing event's article_ids set
         
         return event_ids        
     except Exception as e:

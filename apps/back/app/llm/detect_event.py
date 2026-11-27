@@ -134,7 +134,7 @@ def event_resolution(
         "event_ref": events_dict[event_id].ref_id,
         "event_title": events_dict[event_id].title,
         "event_summary": events_dict[event_id].summary,
-        "published_at_range": [events_dict[event_id].published_at_range_start, events_dict[event_id].published_at_range_end],
+        "published_at_range": (events_dict[event_id].published_at_range_start, events_dict[event_id].published_at_range_end),
         "representative_article": [articles_dict[article_id].title for article_id in list(events_dict[event_id].article_ids)[:5] if article_id in articles_dict]
     } for event_id in similar_article_event_ids]
     
@@ -142,7 +142,7 @@ def event_resolution(
         "event_ref": events_dict[event_id].ref_id,
         "event_title": events_dict[event_id].title,
         "event_summary": events_dict[event_id].summary,
-        "published_at_range": [events_dict[event_id].published_at_range_start, events_dict[event_id].published_at_range_end],
+        "published_at_range": (events_dict[event_id].published_at_range_start, events_dict[event_id].published_at_range_end),
         "representative_article": [articles_dict[article_id].title for article_id in list(events_dict[event_id].article_ids)[:5] if article_id in articles_dict]
     } for event_id in same_batch_event_ids]
     
@@ -432,6 +432,10 @@ def event_summary(
 
                 # Update article_ids with the new articles
                 event.article_ids.update(new_article_ids)
+                for article_id in new_article_ids:
+                    article = articles_dict.get(article_id)
+                    if article:
+                        event.articles[article_id] = article  # Add the article to the event's articles dictionary
 
                 if logger:
                     logger.info(f"Updated event {event_id} summary and scores from LLM.")
